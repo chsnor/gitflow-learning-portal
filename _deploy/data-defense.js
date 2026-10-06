@@ -1,0 +1,185 @@
+// ============================================================
+// data-defense.js — คำตอบลึกสำหรับการป้องกันงาน + แนวทางต่อยอด + ไลบรารี
+// ============================================================
+
+const DEFENSE_DEEP = [
+  {
+    id: "scope", cat: "การแบ่งงาน", q: "ทำไมคนที่ 6 ได้แค่ 2 ไฟล์ แต่เป็นคนถือทั้งระบบ?",
+    short: "เพราะ 2 ไฟล์นั้นคือ 'สัญญาระหว่างทีม' — จุดที่ของคนอื่นเข้ามาและออกไป",
+    deep: "route.ts คือ boundary ที่รับอินพุตจากฝั่ง UI และแปลงเป็นผลลัพธ์กลับ ส่วน pipeline.ts คือ orchestrator ที่กำหนดลำดับว่าใครทำอะไรก่อนหลัง ถ้าแยกย้อยกลับไป ทุกคนต้องตัดสินใจเรื่อง cache, error message และรูปแบบผลลัพธ์เอง → จะได้ของไม่ตรงกัน",
+    bullets: [
+      "route.ts ตัดสินเรื่อง protocol (400/200/500) — ไม่มีใครอื่นยุ่ง",
+      "pipeline.ts ตัดสินเรื่อง policy (แคช, ลำดับ, fallback, เวลา) — คนอื่นทำแค่ pure function",
+      "ทุกโมดูลของเพื่อนเป็นฟังก์ชันบริสุทธิ์: รับเข้า string/object → คืน object ไม่มีผลข้างเคียง ทดสอบง่าย",
+      "ถ้าเปลี่ยนวิธีเก็บ cache ทั้งระบบ แก้ที่ pipeline จุดเดียว"
+    ],
+    libs: [{ name: "ไม่ต้องเพิ่มไลบรารี", why: "contract ควรเป็น TypeScript interface ใน types/index.ts ไม่ใช่ zod schema หรือ protobuf เพราะทีม 6 คนและงานจบใน 1 เทอม", trade: "ถ้าต่อยอดเป็นไมโครเซอร์วิสจริง ๆ ค่อยใส่ zod ที่ route" }],
+    extend: ["แยก pipeline.ts เป็น pipeline/ subfolder เมื่อเกิน 800 บรรทัด", "ทำ pipeline เป็น plugin chain: registerStep(fn) แทนการเรียกตรง ๆ"]
+  },
+  {
+    id: "apiroute", cat: "ความปลอดภัย", q: "ทำไมหน้าเว็บต้องยิงผ่าน /api/analyze ไม่ยิง GitHub ตรงจาก browser?",
+    short: "เพราะ PAT ของผู้ใช้ต้องไม่เดินทางผ่าน client และเราต้องคุม rate limit ได้",
+    deep: "ถ้ายิงจาก browser ตรง ๆ: token จะอยู่ใน client ทุกครั้ง (เสี่ยงหลุดจาก devtools, history, log) และเราคุมจำนวน request ไม่ได้เลย การมี route เป็นตัวกลางทำให้ตรวจ input, จำกัดขนาด, cache ผล และซ่อนรายละเอียดของ API key ได้",
+    bullets: [
+      "route.ts:12-13 อ่าน body → :16-21 ตรวจ url ว่าง → :24 เรียก pipeline → :27 ตอบ 200 → :28-36 จับ error เป็น 500",
+      "token อยู่ฝั่ง server เท่านั้น ไม่ถูกส่งต่อไปยัง client",
+      "ข้อความ error ที่ตอบกลับถูกเขียนให้ผู้ใช้แก้ได้จริง ไม่ใช่ stack trace",
+      "ถ้าจะทำ production จริงต้องเพิ่ม: rate limit ต่อ IP, ตรวจ Origin, ล็อก audit token ที่ใช้"
+    ],
+    libs: [
+      { name: "@octokit/rest", why: "ถ้าต่อยอดจะเรียก GitHub หลาย endpoint ใช้ตัวนี้แทน fetch เอง มี rate limit helper ให้", trade: "เพิ่ม dependency ~50KB และผูกกับ GitHub เท่านั้น — ถ้าจะรองรับ GitLab ต้องมี strategy แยก" },
+      { name: "zod", why: "validate body ที่ route แทน if เดียว ป้องกันชนิดข้อมูลผิด", trade: "เพิ่มโค้ดซ้ำสำหรับ payload 2 ฟิลด์" }
+    ],
+    extend: ["เพิ่ม /api/analyze/status/:jobId สำหรับงานที่ยาวเกิน 3 วินาที", "เพิ่ม Content-Security-Policy + rate limit แบบ token bucket"]
+  },
+  {
+    id: "fallback", cat: "การตัดสินใจ", q: "ทำไมมีโค้ดสำรองซ้ำ ๆ ทั้งที่คน 1/2 ก็เขียนฟังก์ชันเหมือนกัน?",
+    short: "เพื่อให้ระบบรันได้ในวันที่เพื่อนยังไม่ส่งงาน และกัน pipeline ตายเมื่อโมดูลคนอื่น throw",
+    deep: "เป็นการเขียนแบบ integration-first: ทุกจุดที่เรียกโมดูลคนอื่นมี try/catch + ค่า fallback เช่น pipeline:277-291 แกะ URL เองถ้า parseGitHubUrl ล้ม, pipeline:365-377 กรองเองถ้า filterTreeFiles ล้ม, pipeline:381-392 จำแนกชนิดไฟล์เองถ้า detectNextFileType ล้ม ข้อดีคือ demo ได้วันแรกและไม่มี single point of failure ข้อเสียคือโค้ดซ้ำและอาจได้ผลลัพธ์ไม่เหมือนกัน",
+    bullets: [
+      "pipeline:278 เรียก parseGitHubUrl → ถ้าพังใช้การตัดสตริงเองที่ :281-290",
+      "pipeline:366 เรียก filterTreeFiles → ถ้าพังกรองเองที่ :369-376",
+      "pipeline:382 เรียก detectNextFileType → ถ้าพังเดาจากชื่อไฟล์ที่ :384-391",
+      "ทุกจุดมีคอมเมนต์บอกว่าเป็น 'สำรองระหว่างรอ' ของใคร"
+    ],
+    libs: [{ name: "Vitest spy / vi.mock", why: "ทดสอบว่า fallback ทำงานจริง โดย mock ให้ฟังก์ชันของเพื่อน throw", trade: "ต้องมี seam (dependency injection หรือ import ตรง ๆ) ถ้า mock ไม่ได้แปลว่าโค้ดผูกกันแน่นเกิน" }],
+    extend: ["ย้าย fallback ไปเป็น registry เดียวแล้วเลือกได้ว่าใช้ของจริงหรือของสำรอง", "ทำ feature flag ให้เปิด/ปิด fallback ได้ตอน runtime"]
+  },
+  {
+    id: "cache", cat: "ประสิทธิภาพ", q: "ทำไมใช้ cache เป็น Map ในหน่วยความจำ ไม่ใช้ Redis?",
+    short: "เพราะ deployment นี้รัน instance เดียว ใช้ Map ได้ผลทันทีและไม่ต้องมี dependency ภายนอก",
+    deep: "pipeline:11 ประกาศ pipelineCache เป็น Map<string, AnalysisResult> ตรวจที่ :301 และบันทึกที่ :554 ทุกครั้ง ข้อดีคือ O(1) และไม่มี network hop ข้อเสียที่ต้องยอมรับ: หายเมื่อ process restart, แยกข้อมูลไม่ได้หลาย instance, ไม่มี TTL และโตไม่จำกัด (คนยิง URL แปลง ๆ ได้จนกิน RAM) ถ้าจะต่อยอดจริงต้องมีทั้ง LRU + TTL และย้ายไป Redis เมื่อมีหลาย instance",
+    bullets: [
+      "คีย์คือ URL ที่ผู้ใช้กรอก ไม่ใช่ SHA ของโค้ด → ถ้าคลังอัปเดต ผลเก่าจะค้าง จึงควรมี TTL",
+      "isCached: true บอก UI ว่าเป็นผลจากแคช ไม่ใช่การวิเคราะห์ใหม่",
+      "clearPipelineCache() ที่ :16 มีไว้ให้เทสต์รีเซ็ตสถานะระหว่างเคส"
+    ],
+    libs: [
+      { name: "ioredis + cache-manager", why: "cache ข้าม instance + TTL + LRU ได้", trade: "ต้องมี infra เพิ่ม (Redis) และเพิ่ม latency ~1-5ms ต่อครั้ง" },
+      { name: "lru-cache", why: "ถ้ายังไม่มี Redis แต่อยากจำกัดหน่วยความจำใน instance เดียว", trade: "ยังแก้ข้อจำกัดเรื่อง multi-instance ไม่ได้" }
+    ],
+    extend: ["คีย์เป็น owner/repo/branch + commit SHA เพื่อแคชตามเวอร์ชันจริง", "ใส่ TTL 15 นาทีและสุ่มมากไป 20% เพื่อกัน cache stampede"]
+  },
+  {
+    id: "limits", cat: "ประสิทธิภาพ", q: "ตัวเลข 45 ไฟล์ / timeout 4 วินาที / จำกัด 500 ไฟล์ มาจากไหน?",
+    short: "มาจากสมดุลระหว่างความครบถ้วนกับเวลาตอบกลับที่ยอมรับได้ ไม่ใช่ตัวเลขสุ่ม",
+    deep: "ดึงโค้ดดิบคือขั้นที่แพงที่สุด เพราะแต่ละไฟล์คือ 1 HTTP request ไป raw.githubusercontent.com การยิงครั้งละ 45 ไฟล์ด้วย Promise.all ใช้เวลาประมาณ 2-4 วินาทีบนเน็ตปกติ ถ้าเกิน 500 ไฟล์กราฟจะใหญ่จนอ่านไม่ออกและเวลาเรนเดอร์ของคน 4 จะหนัก เกณฑ์เหล่านี้ควรเป็น config ไม่ใช่ตัวเลขฝังในโค้ด",
+    bullets: [
+      "pipeline:397 เลือกเฉพาะไฟล์ซอร์สโค้ด → :411 ตัดที่ 45 → :419 AbortController 4 วินาที → :430 กันพังรายไฟล์",
+      "filterTreeFiles ถูกส่ง maxLimit = 500 ที่ pipeline:366",
+      "code-viewer.ts:62 ตัดโค้ดที่แสดงผลไว้ 300 บรรทัด เพื่อคุมขนาด DOM",
+      "executionTimeMs ที่ pipeline:550 ใช้วัดจริงว่าช้าตรงไหน"
+    ],
+    libs: [{ name: "p-limit / Bottleneck", why: "จำกัดจำนวน request พร้อมกันแทน Promise.all เต็มพลัง ลดโอกาสโดน rate limit", trade: "ช้าลงเล็กน้อยแต่เสถียรกว่า" }],
+    extend: ["ย้ายค่าทั้งหมดเป็น config แล้วให้ผู้ใช้ปรับผ่านตัวเลือกใน UI", "ดึงโค้ดแบบ on-demand ตอนคลิก node แทนดึงล่วงหน้า 45 ไฟล์"]
+  },
+  {
+    id: "regex", cat: "คุณภาพโค้ด", q: "ทำไมแกะ import ด้วย regex ไม่ใช้ AST parser?",
+    short: "เพราะเราต้องแกะโค้ดของคนอื่นที่รันมาแบบ runtime ซึ่งไม่มีไฟล์บนดิสก์ให้ compiler อ่าน",
+    deep: "ถ้ามีไฟล์จริงบนเครื่อง เราจะใช้ TypeScript compiler API หรือ SWC ได้ แต่ GitFlow ดึงโค้ดเป็นสตริงจาก raw CDN ไม่ได้มี module resolution ของโปรเจกต์นั้นมา การใช้ regex จึงเป็นทางเลือกที่รันได้ทุกที่ไม่ต้องมี bundler ข้อเสียที่ต้องรู้คือมันพลาดกรณีซับซ้อน: dynamic import, require แบบ CommonJS, multiline ซับซ้อน และโค้ดที่ถูกสร้างด้วย template literal ทางแก้คือจำกัดขอบเขตให้ชัด (เก็บแค่ import ที่ขึ้นต้นด้วย ./ ../ @/ ~ ตาม parser:193) และมีเส้นสำรอง inferStructuralRelations เติมส่วนที่ regex หาไม่เจอ",
+    bullets: [
+      "parser:179 String Guard คืน [] ทันทีถ้าไม่มีคำว่า import ประหยัดเวลา",
+      "parser:183 ตัดคอมเมนต์ออกก่อน ไม่งั้นจะจับ import ในคอมเมนต์",
+      "parser:187 regex รองรับทั้ง import x from และ import type",
+      "parser:194 ใช้ seenTargets กัน import ซ้ำ",
+      "ทั้งหมดนี้มีเทสต์ครอบใน 2_parser.test.ts (177 บรรทัด)"
+    ],
+    libs: [
+      { name: "web-tree-sitter (WASM)", why: "parse AST จริงใน runtime ได้แม้ไม่มีไฟล์ .ts เพราะใช้ grammar ที่ compile เป็น WASM", trade: "เพิ่ม ~1MB wasm + โหลดช้ากว่า regex หลายเท่า และต้องเลือก grammar ให้ถูกภาษา" },
+      { name: "@typescript-eslint/typescript-estree", why: "ได้ AST คุณภาพสูงสุด", trade: "หนักเกินไปสำหรับงานที่ต้องรันบน serverless ทุกคำขอ และต้องมี node_modules ของโปรเจกต์เป้าหมาย" }
+    ],
+    extend: ["เพิ่มการจับ dynamic import() และ require()", "ถ้าคลังใหญ่เกิน 300 ไฟล์ ให้ย้ายการ parse ไป Web Worker เพื่อไม่บล็อก event loop"]
+  },
+  {
+    id: "security", cat: "ความปลอดภัย", q: "มีจุดเสี่ยงด้านความปลอดภัยอะไรบ้าง แล้วกันไว้ตรงไหน?",
+    short: "4 จุดหลัก: token, SSRF จาก URL, XSS จากการแสดงโค้ด, และการไม่จำกัดอัตราการเรียก",
+    deep: "ระบบรับ URL จากผู้ใช้แล้วไปยิงต่อ จึงต้องระวังการใช้ URL เป็นช่องทางออกนอกระบบ (SSRF) รวมถึงการแสดงโค้ดของคนอื่นในหน้าเว็บต้อง escape เสมอ สิ่งที่ทำไปแล้วคือ pipeline:293-295 บล็อก URL ที่แกะไม่ได้, route.ts:16-21 ตรวจ body, github.ts ตรวจโดเมนเป็น github.com เท่านั้น และไม่ส่ง token กลับมาที่ client ส่วนที่ยังควรเพิ่มคือ rate limit, ตรวจ redirect ของ raw CDN และห้าม path ที่ขึ้นต้นด้วย ..",
+    bullets: [
+      "github.ts:7 parseGitHubUrl ทำหน้าที่เป็น allowlist ของโดเมน — ขวัญคือจุดแรกที่ต้องเข้ม",
+      "pipeline:281-290 โค้ดสำรองตัดสตริงจาก URL ต้องระวังไม่ให้กลายเป็นช่องเปิดกว้างเกินไป",
+      "หน้าเว็บแสดงโค้ดที่ดึงมาจากคลังคนอื่น → ต้อง escape HTML ก่อน render เสมอ",
+      "โครงการนี้เป็นเครื่องมือช่วยอ่านโค้ด ไม่ใช่ระบบที่รับไฟล์อัปโหลด → พื้นที่การรันโค้ดของคนอื่นจึงไม่มี"
+    ],
+    libs: [
+      { name: "DOMPurify", why: "sanitize HTML ที่มาจากโค้ดของคนอื่นก่อนแสดง", trade: "เพิ่ม dependency และถ้า escape ถูกที่แล้วอาจไม่จำเป็น" },
+      { name: "upstash/ratelimit", why: "rate limit แบบ distributed เหมาะกับ serverless", trade: "ต้องมี Redis ผูกไว้กับ deploy" }
+    ],
+    extend: ["เพิ่ม allowlist owner สำหรับคลังสาธารณะที่อนุญาต", "บันทึก audit log ว่าใครใช้ token อะไรเมื่อไร"]
+  },
+  {
+    id: "testing", cat: "คุณภาพโค้ด", q: "มีเทสต์ 6 ไฟล์ ครอบอะไรบ้าง และพอสำหรับงานระดับนี้ไหม?",
+    short: "ครอบครบทั้ง unit ของแต่ละคน, logic ฝั่ง UI และ integration ทั้งเส้นทาง",
+    deep: "โครงสร้างเทสต์บอกเจตนาชัด: 1_github (140) ทดสอบการแกะ URL และสร้าง header, 2_parser (177) ทดสอบการกรองและจำแนกชนิดไฟล์, 3_generator (89) ทดสอบการสร้าง node/edge, 4_frontend_ui (106) ทดสอบตรรกะฝั่ง UI เช่น validateUrlInput, 5_side_drawer (62) ทดสอบการตัดโค้ดสำหรับ drawer, 6_integration (561) ทดสอบเส้นทางจริงตั้งแต่ URL จนได้ AnalysisResult โดย mock fetch ไฟล์เดียวจบข้อเสียที่ยอมรับได้คือยังไม่มี e2e จริง และ route.ts เอง (37 บรรทัด) ยังไม่มีเทสต์ตรง",
+    bullets: [
+      "ใช้ Vitest ตาม scripts ใน package.json (npm test = vitest run)",
+      "เทสต์ฝั่ง UI ทดสอบฟังก์ชันล้วน ไม่ต้องมี DOM จริง เพราะ logic ถูกแยกไว้ใน ui-helper.ts",
+      "เทสต์ integration ใช้ mockTreeData และ mockFilesContent ที่ pipeline:269-270 รับเข้ามา",
+      "beforeEach/afterEach มีการคืน mocks เพื่อไม่ให้เคสรั่วกัน"
+    ],
+    libs: [{ name: "Playwright", why: "เติม e2e จริง: กรอก URL → เห็นกราฟ → คลิก node → เห็นโค้ด", trade: "ต้องมี browser ใน CI ช้ากว่า unit test หลายเท่า" }, { name: "MSW", why: "mock network ระดับ request แทนการ stub fetch", trade: "เพิ่มความซับซ้อนในการตั้งค่า" }],
+    extend: ["เพิ่มเทสต์ของ route.ts โดยเรียก POST handler โดยตรง", "เพิ่ม coverage threshold ใน vitest config ให้ pipeline.ts ไม่ต่ำกว่า 80%"]
+  },
+  {
+    id: "libs", cat: "ไลบรารี", q: "ทำไมเลือกไลบรารีชุดนี้ และถ้าเปลี่ยนจะเลือกอะไร?",
+    short: "เลือกของที่ติดตั้งจริงใน package.json และอธิบายข้อแลกเปลี่ยนได้ทุกตัว",
+    deep: "ระบบใช้ @xyflow/react วาดกราฟแบบ interactive, @dagrejs/dagre จัดพิกัดแบบลำดับชั้น, mermaid สร้างข้อความกราฟสำหรับส่งออก, prismjs ไฮไลต์โค้ดใน drawer, lucide-react ไอคอน, Tailwind v4 สำหรับสไตล์ และ Vitest สำหรับเทสต์ แต่ละตัวถูกเลือกเพราะทำงานบน client ได้และไม่ต้องมี backend เพิ่ม จุดที่ควรรู้คือ React Flow ใหญ่และถ้ากราฟไม่ต้อง interactive เราอาจใช้ mermaid อย่างเดียวแทนทั้งระบบ",
+    bullets: [
+      "กราฟ: @xyflow/react (ใช้แล้ว) — ทางเลือก elkjs เมื่อกราฟใหญ่กว่า 300 node",
+      "ไฮไลต์โค้ด: prismjs (ใช้แล้ว) — ทางเลือก shiki คุณภาพสูงกว่าแต่ช้ากว่าและหนักกว่า",
+      "ตัวแก้โค้ดแบบเต็ม: ปัจจุบันใช้ code-viewer.ts ตัด 300 บรรทัด — ถ้าต้องการแก้โค้ดจริงควรใช้ Monaco",
+      "state ฝั่ง client: ปัจจุบันใช้ useState ธรรมดา พอสเกลขึ้นค่อยใช้ zustand",
+      "ข้อมูลจาก server: ปัจจุบัน fetch ตรงใน handleSubmit — ถ้ามีหลายหน้าจอค่อยใช้ TanStack Query เพื่อแคชและ retry"
+    ],
+    libs: [
+      { name: "monaco-editor", why: "ต้องแก้โค้ดในตัวเว็บจริง ๆ", trade: "หนักหลาย MB ต้องโหลดแบบ lazy" },
+      { name: "zustand", why: "แยก state ของกราฟออกจาก component ไม่ต้องส่ง props ลึก ๆ", trade: "เพิ่มแนวคิด store ในโปรเจกต์ที่ใช้แค่ useState ก็ยังทำได้" },
+      { name: "@tanstack/react-query", why: "แคชฝั่ง client, retry, และ stale time ให้ตรงกับ pipeline cache", trade: "ต้องออกแบบ cache key ให้ดี ไม่งั้นจะได้ผลซ้ำซ้อนกับแคชฝั่ง server" }
+    ],
+    extend: ["ถ้าต้องการแก้โค้ดในระบบจริง: ย้าย raw CDN fetch ไปฝั่ง server proxy แล้วเปิดให้เขียนผ่าน GitHub API", "แยกชุดไลบรารี client กับ server ใน bundle เพื่อลดขนาด"]
+  },
+  {
+    id: "scale", cat: "การต่อยอด", q: "ถ้าให้ระบบดีขึ้นอีก ผมจะเพิ่มอะไรตรงไหนก่อน?",
+    short: "5 อันดับ: แคช → งาน async → ความแม่นของการแกะโค้ด → rate limit → ประสิทธิภาพหน้าจอ",
+    deep: "ลำดับนี้มาจากผลตอบแทนต่อความเสี่ยง ไม่ใช่ความยาก เพราะแคชคือบรรทัดเดียวที่เปลี่ยนประสิทธิภาพได้มากที่สุดในงานสั้น ๆ ส่วนการแกะโค้ดให้แม่นขึ้นคืองานใหญ่ที่สุดแต่ค่อยเป็นค่อยไป",
+    bullets: [
+      "อันดับ 1: เพิ่ม TTL + LRU ให้แคชที่ pipeline:11 แล้วผูกกับ SHA ของ commit",
+      "อันดับ 2: ถ้าคลังใหญ่เกิน ~3 วินาที เปลี่ยนเป็น background job แล้วให้ client poll สถานะ",
+      "อันดับ 3: ย้ายการแกะ import จาก regex ไปเป็น AST (web-tree-sitter) เพิ่มความแม่น",
+      "อันดับ 4: เพิ่ม rate limit ต่อ IP ที่ route.ts และล็อก audit log",
+      "อันดับ 5: ใช้ ELK เมื่อกราฟใหญ่ และ virtualized list เมื่อไฟล์ยาวมาก"
+    ],
+    libs: [{ name: "BullMQ / Trigger.dev", why: "ทำคิวงานแบบ background แล้ว poll สถานะได้", trade: "ต้องมี Redis และเพิ่มโครงสร้างงานควบคุม" }],
+    extend: ["แสดง progress ระหว่างรัน (ดึงไฟล์กี่ไฟล์แล้ว)", "เพิ่มโหมดเปรียบเทียบก่อน-หลังปรับปรุง"]
+  },
+  {
+    id: "demo", cat: "การนำเสนอ", q: "ถ้าอาจารย์ถามว่าจะแก้อะไรเพิ่มในสิ้นเทอม แล้วทำไมไม่ทำเลย?",
+    short: "เพราะขอบเขตที่ส่งต้องไม่เสี่ยง แต่แนวทางต่อยอดต้องพูดออกมาให้ชัด",
+    deep: "การส่งงานให้เสร็จและตรงตามขอบเขตคือหน้าที่ การเพิ่มของใหม่ที่ไม่มีใครขอคือความเสี่ยงที่ทำให้ของเดิมพัง ผมจึงแยกเป็นสองระดับ: ของที่ทำเสร็จแล้วคือ pipeline ที่ครบ 6 สเต็ปพร้อม cache/fallback/เวลา, route ที่มี guard ครบ และเทสต์ครบ 6 ไฟล์ ส่วนของที่เสนอให้ทำต่อคือรายการด้านบนซึ่งจัดลำดับไว้พร้อมเหตุผลและต้นทุน การบอกว่า 'ผมรู้ว่าต้องปรับตรงไหน เพราะอะไร และจะเสียอะไรถ้าทำ' สื่อความเข้าใจระบบได้ดีกว่าการทำเพิ่มแล้วพัง",
+    bullets: [
+      "รู้จุดที่อ่อนของงานตัวเองแล้วบอกตรง ๆ ได้ — เช่น pipeline.ts ยาว 561 บรรทัดและมี fallback ซ้ำ",
+      "ทุกข้อเสนอผูกกับไฟล์และบรรทัดจริง ไม่พูดกว้าง ๆ",
+      "แยกชัดว่าอันไหนควรทำต่อทันที อันไหนต้องรอเทอมหน้า"
+    ],
+    libs: [{ name: "ไม่มี", why: "คำถามนี้วัดการตัดสินใจ ไม่ใช่ความรู้ไลบรารี", trade: "-" }],
+    extend: ["ทำ PR ย่อย ๆ ที่รีวิวได้จริง แทนการเปลี่ยนทีเดียวหลายร้อยบรรทัด"]
+  }
+];
+
+// ---------- แผนต่อยอด 5 เฟส ----------
+const ROADMAP = [
+  { phase: "P0", title: "ทำให้ผลลัพธ์ถูกต้องขึ้น", effort: "1 วัน", impact: "สูง", why: "แคชผูกกับ commit SHA + TTL และย้ายตัวเลข 45/500/4s ไปเป็น config", risk: "ต่ำ — แก้ใน pipeline.ts จุดเดียว", items: ["คีย์แคชเป็น owner/repo/branch+sha", "เพิ่ม TTL 15 นาทีและจำกัดขนาดแคช", "ย้ายเกณฑ์ทั้งหมดไป config.ts", "คืนค่า isCached พร้อมเวลาที่แคชเก่า"] },
+  { phase: "P1", title: "ทนทานขึ้น", effort: "1-2 วัน", impact: "สูง", why: "งานใหญ่เกิน 3 วินาทีจะทำให้ serverless timeout", risk: "กลาง — ต้องมีที่เก็บสถานะงาน", items: ["แยกเป็น background job + endpoint สถานะ", "แสดง progress ใน UI", "ย้ายแคชไป Redis เมื่อมีหลาย instance", "เพิ่ม rate limit ต่อ IP"] },
+  { phase: "P2", title: "แกะโค้ดแม่นขึ้น", effort: "3-5 วัน", impact: "สูง", why: "regex พลาด dynamic import และ require", risk: "กลาง — เปลี่ยนผลลัพธ์ของชั้น 4", items: ["เพิ่มการจับ dynamic import() และ require()", "ย้าย parse ไป Web Worker เมื่อไฟล์เกิน 300", "เทียบผลลัพธ์กับเทสต์ชุดเดิมทุกครั้งที่เปลี่ยน", "รองรับ tsconfig paths"] },
+  { phase: "P3", title: "กราฟใช้งานจริง", effort: "2-3 วัน", impact: "กลาง", why: "กราฟใหญ่ทั้งจอทำให้อ่านยาก", risk: "ต่ำ", items: ["สลับจาก Dagre เป็น ELK เมื่อเกิน 300 node", "กรองเฉพาะ page/action/middleware ก่อน", "เพิ่มโหมดส่งออก PNG/SVG", "ทำ deep-link ราย node"] },
+  { phase: "P4", title: "เปิดให้แก้โค้ดได้", effort: "1 สัปดาห์", impact: "สูง", why: "จาก 'อ่าน' ไปสู่ 'แก้' ต้องมี write path ที่ปลอดภัย", risk: "สูง — เกี่ยวกับสิทธิ์เขียน repo", items: ["proxy การดึงโค้ดไปฝั่ง server", "สร้าง branch + commit ผ่าน GitHub API", "แสดง diff ก่อนยืนยันทุกครั้ง", "จำกัดสิทธิ์เฉพาะ repo ที่ผู้ใช้เปิดเครื่องหมายอนุญาต"] }
+];
+
+// ---------- คำถามที่อาจารย์อาจถามเรื่องตัวพอร์ทัลนี้ ----------
+const PORTAL_QA = [
+  { q: "ทำไมถึงต้องแยก data-code.js / data-content.js / data-arch.js / app.js?", a: "แยกข้อมูลออกจาก logic ข้อมูลใหญ่โตช้าและแก้บ่อย ส่วน logic เล็กและต้องไม่พัง เมื่อแยกแล้วแก้เนื้อหาสอนได้โดยไม่แตะ render และต้องโหลดตามลำดับ เพราะ data-content อ้าง RAW_* ที่อยู่ใน data-code" },
+  { q: "ทำไม FILE_META ถึงสร้างแบบ lazy?", a: "ถ้าประกาศ const FILE_META = [...] ที่ระดับไฟล์ มันจะพยายามอ่าน RAW_PARSER ตอนที่ data-content.js ยังไม่ได้โหลด จะได้ ReferenceError: RAW_PARSER is not defined การย้ายเข้าไปในฟังก์ชันแล้วเรียกจาก init จึงต้องรอให้ data-code.js โหลดเสร็จ" },
+  { q: "ไฮไลต์โค้ดทำงานยังไง ไม่ใช่ repaint ทั้งไฟล์หรอ?", a: "ใช้ classList เฉพาะแถวที่อยู่ในช่วง โดยเลือกแถวด้วย querySelectorAll ที่ id ขึ้นต้นด้วย fileKey แล้วเติมคลาส ส่วนการหรี่แถวอื่นใช้คลาส has-highlight ที่ตัว scroll container แค่ 1 กฎ CSS ดังนั้นพยายามหลีกเลี่ยงการเขียน style ซ้ำ ๆ เป็นรายแถว" },
+  { q: "ทำไมบรรทัดที่กดถึงอยู่บนสุดของ pane เสมอ?", a: "เพราะตัวอ่านบรรทัดเป็นการ์ดลอยที่คร่อมพื้นที่ด้านล่าง ถ้าไม่เลื่อนบรรทัดเป้าหมายขึ้นมา ผู้ใช้จะเห็นแต่การ์ดแล้วไม่เห็นโค้ดจริงที่เพิ่งคลิก การวัดระยะใช้ getBoundingClientRect หัก scrollTop เพราะ offsetTop อาจอ้างคนละ offsetParent" },
+  { q: "กราฟความสัมพันธ์ 251 เส้น คำนวณยังไงไม่ช้า?", a: "ทำครั้งเดียวตอนโหลดหน้า สองรอบ: รอบแรกเก็บชื่อ export ทั้งหมด 46 ตัว รอบสองค่อยไล่ทีละบรรทัด และใช้ text.includes() กรองก่อนค่อยใช้ regex ทำให้แพงแค่บรรทัดที่เป็นไปได้ หลังจากนั้นทุกครั้งที่คลิกคือการไล่ array ขนาดคงที่" },
+  { q: "ถ้า CDN ของ Tailwind ตก หน้าเว็บพังไหม?", a: "ไม่ เพราะ layout หลักทั้งหมดเขียนไว้ใน style.css เอง ส่วน Tailwind เป็นแค่ utilities เสริม ถ้าอยากให้สมบูรณ์แบบต้อง build Tailwind ตอน deploy" }
+];
