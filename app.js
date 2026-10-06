@@ -39,10 +39,13 @@ function highlightTS(code) {
 
 // ===== State (เจ้าของเดียวของสถานะ UI) =====
 let currentStepIndex = 0;        // 0-5
-let currentMainView = "blocks";  // blocks | summary | sim | cicd | redteam | quiz
+let currentMainView = "blocks";  // section ที่กำลังแสดง: blocks | summary | sim | cicd | redteam | arch | deep | quiz
+let currentMode = "blocks";      // โหมดหลัก: blocks | sim | system | drill
 let currentLeftTab = "pipeline";
 let currentRightTab = "github";
 let currentMobilePane = "pipeline";
+let focusedPane = "left";        // ฝั่งที่แผลข้างขวาจะอธิบาย
+let fileQuery = "";              // คำค้นในรายการไฟล์
 let pinnedLine = null;    // { file, line } — บรรทัดที่ผู้ใช้กดปักหมุดไว้ (ครอบคลุมทั้ง 19 ไฟล์)
 let relExpanded = false;  // ขยายดูไฟล์ที่เกี่ยวข้องชั้นที่ 2 หรือไม่
 const openRelKeys = new Set(); // การ์ดความสัมพันธ์ที่ผู้ใช้กดขยายดูโค้ด
@@ -251,26 +254,77 @@ const VIEW_TITLES = {
   quiz: ["Defense Q&A & Quiz", "สคริปต์ตอบอาจารย์ 5 ข้อ + แบบทดสอบพร้อมเฉลย"]
 };
 
+// ===== 4 โหมด — รวมมุมมองเดิม 8 อันเป็น "หมวดย่อย" ของแต่ละโหมด =====
+// section id เดิมทั้งหมดยังเรียกผ่าน switchMainView('...') ได้ตามปกติ
+const MODES = {
+  blocks: { btn: "nav-blocks", sections: [{ id: "blocks", label: "โค้ดคู่ขนาน" }, { id: "summary", label: "ภาพรวบ 6 สเต็ป" }] },
+  sim:    { btn: "nav-sim",    sections: [{ id: "sim", label: "ไทม์ไลน์ 10 จังหวะ" }] },
+  system: { btn: "nav-arch",   sections: [{ id: "arch", label: "สถาปัตยกรรม" }, { id: "cicd", label: "CI/CD" }, { id: "redteam", label: "Red Team" }, { id: "deep", label: "ป้องกันงานลึก" }] },
+  drill:  { btn: "nav-quiz",   sections: [{ id: "quiz", label: "Q&A + แบบทดสอบ" }] }
+};
+const SECTION_MODE = {};
+Object.entries(MODES).forEach(([m, cfg]) => cfg.sections.forEach((s) => { SECTION_MODE[s.id] = m; }));
+
 const PERSON_COLORS = { "1": "#3fb950", "2": "#bc8cff", "3": "#d29922", "4": "#58a6ff", "5": "#f472b6", "6": "#ff7b72", s: "#8b949e" };
 function personColor(badge) {
   const m = /คน\s*(\d)/.exec(badge || "");
   return m ? PERSON_COLORS[m[1]] : PERSON_COLORS.s;
 }
 
-// ===== File tabs (สร้างจาก FILE_META ทั้ง 19 ไฟล์) =====
-function renderFileTabs() {
+// ===== หัว pane = 3 element แยกกัน: ชื่อไฟล์ · เจ้าของ · ความสัมพันธ์กับสเต็ป =====
+// เดิม selectStep() เขียนทับป้ายด้วยความสัมพันธ์ ทำให้ "ชื่อไฟล์" หายไปจากสายตา
+// → ตอนนี้ syncPaneChrome() เป็นแหล่งความจริงเดียว ทุกค่ามาจาก state เสมอ
+function paneFileKey(pane) { return pane === "left" ? currentLeftTab : currentRightTab; }
+
+function paneRelation(pane) {
+  const step = LOGICAL_STEPS[currentStepIndex] || LOGICAL_STEPS[0];
+  const key = paneFileKey(pane);
+  if (pane === "left") {
+    if (key === "pipeline" || key === "route") return { text: `งานของคน 6 · สเต็ป ${step.step}`, cls: "rel-owner" };
+    return { text: "เปิดเทียบ · ไฟล์ประกอบ", cls: "" };
+  }
+  if (key === "github") {
+    return step.gRange
+      ? { text: `ถูกเรียกในสเต็ป ${step.step}`, cls: "rel-callee" }
+      : { text: "สเต็ปนี้ไม่ได้เรียก", cls: "rel-none" };
+  }
+  return { text: "เปิดเทียบ · ไม่ใช่ callee ของสเต็ป", cls: "" };
+}
+
+function renderPaneChrome(pane) {
+  const meta = FILE_META.find((f) => f.key === paneFileKey(pane));
+  if (!meta) return;
+  const head = document.getElementById(`${pane}-tabs`);
+  if (head) {
+    head.innerHTML = `
+      <span class="pane-file"><span class="file-icon${meta.icon === "CSS" ? " css-icon" : ""}" aria-hidden="true">${meta.icon}</span>${esc(meta.name)}</span>
+      <button type="button" class="pane-swap" onclick="focusFileList('${pane}')" title="เปิดรายการไฟล์ทั้งหมด">เปลี่ยนไฟล์ ▾</button>
+      <button type="button" class="pane-open-here" onclick="focusPane('${pane}')">อธิบายไฟล์นี้ →</button>`;
+  }
+  const strip = document.getElementById(`pane-${pane}-strip`);
+  if (strip) {
+    const rel = paneRelation(pane);
+    strip.innerHTML = `
+      <span class="pane-badge" style="color:${personColor(meta.badge)}">${esc(meta.badge)}</span>
+      <span class="pane-rel ${rel.cls}">${esc(rel.text)}</span>
+      <span class="pane-badge owner-muted">${fileLineCount(meta)} บรรทัด</span>`;
+  }
+}
+window.renderPaneChrome = renderPaneChrome;
+
+function renderFocusChips() {
   ["left", "right"].forEach((pane) => {
-    const bar = document.getElementById(`${pane}-tabs`);
-    if (!bar) return;
-    bar.innerHTML = FILE_META.filter((f) => f.pane === pane).map((f) => {
-      const active = (pane === "left" ? currentLeftTab : currentRightTab) === f.key;
-      return `<button type="button" id="tab-${pane}-${f.key}" class="editor-tab${active ? " active" : ""}" onclick="switchFileTab('${pane}','${f.key}')" title="${esc(f.badge)}" aria-pressed="${active}">
-        <span class="file-icon${f.icon === "CSS" ? " css-icon" : ""}" aria-hidden="true">${f.icon}</span>
-        <span class="file-name">${f.name}</span>
-      </button>`;
-    }).join("");
+    const btn = document.getElementById(`focus-${pane}`);
+    if (btn) btn.setAttribute("aria-pressed", String(focusedPane === pane));
   });
 }
+
+function syncPaneChrome() {
+  renderPaneChrome("left");
+  renderPaneChrome("right");
+  renderFocusChips();
+}
+window.syncPaneChrome = syncPaneChrome;
 
 function renderPane(containerId, rawCode, fileType) {
   const container = document.getElementById(containerId);
@@ -278,8 +332,10 @@ function renderPane(containerId, rawCode, fileType) {
   const lines = rawCode.split("\n");
   container.innerHTML = "";
   const frag = document.createDocumentFragment();
+  let lastReal = lines.length - 1;
+  while (lastReal >= 0 && lines[lastReal].trim() === "") lastReal--;
   lines.forEach((lineText, idx) => {
-    if (lineText === "" && idx === lines.length - 1) return; // ข้ามแถวว่างท้ายไฟล์จริง
+    if (idx > lastReal) return; // ไม่เรนเดอร์แถวว่างท้ายไฟล์จริง
     const lineNum = idx + 1;
     const row = document.createElement("div");
     row.className = "code-row";
@@ -295,17 +351,9 @@ function renderPane(containerId, rawCode, fileType) {
 function renderCodePanes() {
   const leftMeta = FILE_META.find((f) => f.key === currentLeftTab);
   const rightMeta = FILE_META.find((f) => f.key === currentRightTab);
-  renderFileTabs();
-  if (leftMeta) {
-    renderPane("left-pane-body", leftMeta.raw, leftMeta.key);
-    const badge = document.getElementById("pane-left-badge");
-    if (badge) badge.textContent = leftMeta.badge;
-  }
-  if (rightMeta) {
-    renderPane("right-pane-body", rightMeta.raw, rightMeta.key);
-    const badge = document.getElementById("pane-right-badge");
-    if (badge) badge.textContent = rightMeta.badge;
-  }
+  if (leftMeta) renderPane("left-pane-body", leftMeta.raw, leftMeta.key);
+  if (rightMeta) renderPane("right-pane-body", rightMeta.raw, rightMeta.key);
+  syncPaneChrome();
   renderInspector();
 }
 
@@ -315,11 +363,10 @@ function switchFileTab(pane, key) {
 
   if (pane === "left") currentLeftTab = key; else currentRightTab = key;
   renderPane(pane === "left" ? "left-pane-body" : "right-pane-body", meta.raw, key);
-  renderFileTabs();
+  focusedPane = pane;
+  syncPaneChrome();
 
   if (pane === "left") {
-    const badge = document.getElementById("pane-left-badge");
-    if (badge) badge.textContent = meta.badge;
     const step = LOGICAL_STEPS[currentStepIndex];
     if (key === "pipeline") {
       highlightRange("pipeline", step.pRange[0], step.pRange[1], step.pTarget);
@@ -331,11 +378,6 @@ function switchFileTab(pane, key) {
       clearHighlight(key);
     }
   } else {
-    const badge = document.getElementById("pane-right-badge");
-    if (badge) {
-      badge.textContent = meta.badge;
-      badge.classList.toggle("owner-callee", key === "github");
-    }
     clearHighlight(key);
     if (key === "github") {
       const step = LOGICAL_STEPS[currentStepIndex];
@@ -346,6 +388,7 @@ function switchFileTab(pane, key) {
     }
   }
   renderInspector();
+  renderMobileTabs();
 }
 
 // ===== Highlight & scroll =====
@@ -390,9 +433,11 @@ function scrollToLine(fileType, startLine, targetLine) {
 // ===== ปักหมุดบรรทัด: กดที่บรรทัดไหนก็ได้ (ครบ 19 ไฟล์) = ไฮไลต์ + ตัวอ่านขยาย =====
 const PIN_CONTEXT = 8; // จำนวนบรรทัดบริบทรอบบรรทัดเป้าหมาย
 
+// จำนวนบรรทัดจริง — ตัดแถวว่างท้ายไฟล์ทิ้งทั้งหมด ไม่ใช่แค่แถวสุดท้าย
 function fileLineCount(meta) {
   const lines = meta.raw.split("\n");
-  return lines.length - (lines[lines.length - 1] === "" ? 1 : 0);
+  while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
+  return lines.length;
 }
 
 function onCodeRowClick(fileKey, lineNum) {
@@ -545,6 +590,7 @@ function renderLineReader() {
   }
 
   const ownerColor = personColor(meta.badge);
+  const isOpenInPane = meta.key === currentLeftTab || meta.key === currentRightTab;
   const clicked = (lines[line - 1] || "").trim();
   const simHit = SIM_JUMPS.findIndex((j) => (j.snippets || []).some((s) => s.file === meta.key && line >= s.start && line <= s.end));
   const stepHit = meta.key === "pipeline"
@@ -565,6 +611,7 @@ function renderLineReader() {
       <span class="reader-line">บรรทัด ${line} / ${total}</span>
       ${relatedCount ? `<span class="badge badge-blue">${relatedCount} ไฟล์ที่เกี่ยวข้อง</span>` : ""}
       <span class="reader-owner" style="color:${ownerColor}">${esc(meta.badge)}</span>
+      ${isOpenInPane ? "" : `<button type="button" class="nav-btn reader-btn" onclick="openFileFromList('${meta.key}')">เปิด ${esc(meta.name)} ใน pane →</button>`}
       ${secondList.length ? `<button type="button" class="reader-toggle" onclick="toggleRelDepth()" aria-expanded="${relExpanded}">${relExpanded ? "ซ่อนชั้นที่ 2" : `ดูอีก ${secondList.length} ไฟล์ (ชั้นที่ 2)`}</button>` : ""}
       <button type="button" class="reader-close" onclick="clearPinned()" aria-label="ปิดตัวอ่านบรรทัด">✕</button>
     </div>
@@ -584,8 +631,7 @@ function renderLineReader() {
     </div>
     <div class="reader-path">${meta.bc}</div>`;
   el.hidden = false;
-  // ยึดตัวอ่านไว้คนละฝั่งกับไฟล์ที่กำลังอ่าน เพื่อไม่ให้บังโค้ดของไฟล์นั้น
-  el.className = `line-reader reader-anchor-${meta.pane}`;
+  el.className = "line-reader";   // ตัวอ่านเป็น bottom sheet ใน flow ไม่ลอยทับโค้ด
 
   const body = document.getElementById("reader-body");
   const target = body && body.querySelector(".reader-target");
@@ -614,22 +660,14 @@ function selectStep(stepIndex) {
     scrollToLine("route", 9, 24);
   }
 
-  const rightBadge = document.getElementById("pane-right-badge");
   if (step.gRange) {
     if (currentRightTab !== "github") switchFileTab("right", "github");
     highlightRange("github", step.gRange[0], step.gRange[1], step.gTarget);
     scrollToLine("github", step.gRange[0], step.gTarget);
-    if (rightBadge) {
-      rightBadge.textContent = "Callee (เชื่อมโยง)";
-      rightBadge.classList.add("owner-callee");
-    }
   } else {
     clearHighlight("github");
-    if (rightBadge && currentRightTab === "github") {
-      rightBadge.textContent = "ไม่ได้ถูกเรียกในสเต็ปนี้";
-      rightBadge.classList.remove("owner-callee");
-    }
   }
+  syncPaneChrome();
   renderMobileTabs();
 }
 
@@ -703,12 +741,91 @@ function guideCard(key) {
     </div>`;
 }
 
+// ===== แผลข้างขวา: อธิบายไฟล์ที่โฟกัส + รายการไฟล์ทั้งหมด (แทน dock ล่างจอ) =====
 function renderInspector() {
-  const left = document.getElementById("inspector-left");
-  const right = document.getElementById("inspector-right");
-  if (left) left.innerHTML = guideCard(currentLeftTab);
-  if (right) right.innerHTML = guideCard(currentRightTab);
+  const guide = document.getElementById("inspector-left");
+  if (guide) guide.innerHTML = guideCard(paneFileKey(focusedPane));
+  const dir = document.getElementById("inspector-right");
+  if (dir) dir.innerHTML = fileDirectoryHTML();
+  renderFocusChips();
 }
+
+function focusPane(pane) {
+  if (pane !== "left" && pane !== "right") return;
+  focusedPane = pane;
+  renderInspector();
+}
+window.focusPane = focusPane;
+
+function fileDirectoryHTML() {
+  const q = fileQuery.trim().toLowerCase();
+  const groups = [];
+  FILE_META.forEach((f) => {
+    if (q && !(f.name.toLowerCase().includes(q) || f.badge.toLowerCase().includes(q) || String(f.bc || "").toLowerCase().includes(q))) return;
+    let g = groups.find((x) => x.badge === f.badge);
+    if (!g) { g = { badge: f.badge, color: personColor(f.badge), files: [] }; groups.push(g); }
+    g.files.push(f);
+  });
+  if (!groups.length) return `<p class="guide-empty">ไม่พบไฟล์ที่ตรงกับ “${esc(fileQuery)}”</p>`;
+  return groups.map((g) => `
+    <div>
+      <div class="file-group-head" style="color:${g.color}">${esc(g.badge)}</div>
+      ${g.files.map((f) => {
+        const where = f.key === currentLeftTab ? "left" : f.key === currentRightTab ? "right" : "";
+        return `<button type="button" class="file-dir-item" data-file="${f.key}" aria-current="${where === focusedPane ? "true" : "false"}" onclick="openFileFromList('${f.key}')" title="${esc(f.bc)}">
+          <span class="file-icon${f.icon === "CSS" ? " css-icon" : ""}" aria-hidden="true">${f.icon}</span>
+          <span class="file-name">${esc(f.name)}</span>
+          <span class="file-lines">${fileLineCount(f)}</span>
+        </button>`;
+      }).join("")}
+    </div>`).join("");
+}
+
+function filterFileList(query) {
+  fileQuery = query || "";
+  renderInspector();
+}
+window.filterFileList = filterFileList;
+
+function fileSearchKey(e) {
+  if (e.key === "Enter") {
+    const first = document.querySelector("#inspector-right .file-dir-item");
+    if (first) { openFileFromList(first.getAttribute("data-file")); e.preventDefault(); }
+  } else if (e.key === "Escape") {
+    filterFileList("");
+    const inp = document.getElementById("file-search");
+    if (inp) { inp.value = ""; inp.blur(); }
+  }
+}
+window.fileSearchKey = fileSearchKey;
+
+function openFileFromList(key) {
+  const meta = FILE_META.find((f) => f.key === key);
+  if (!meta) return;
+  if (window.innerWidth < 1024) { switchMobilePane(key); return; }
+  focusedPane = meta.pane;
+  switchFileTab(meta.pane, key);
+}
+window.openFileFromList = openFileFromList;
+
+function focusFileList(pane) {
+  if (pane) focusedPane = pane;
+  renderInspector();
+  const rail = document.getElementById("inspector");
+  if (rail) rail.classList.add("rail-open");
+  const inp = document.getElementById("file-search");
+  if (inp) { inp.focus(); inp.select(); }
+}
+window.focusFileList = focusFileList;
+
+function toggleContextRail() {
+  const rail = document.getElementById("inspector");
+  if (!rail) return;
+  rail.classList.remove("inspector-hidden");
+  const open = rail.classList.toggle("rail-open");
+  rail.setAttribute("aria-expanded", String(open));
+}
+window.toggleContextRail = toggleContextRail;
 
 function toggleInspector() {
   const dock = document.getElementById("inspector");
@@ -719,51 +836,76 @@ function toggleInspector() {
 }
 window.toggleInspector = toggleInspector;
 
-// ===== View switching =====
-function switchMainView(mode) {
-  currentMainView = mode;
+// ===== เปลี่ยนหมวดย่อย (ชื่อ section เดิมทุกตัวยังเรียกได้) =====
+function renderSectionTabs() {
+  const bar = document.getElementById("section-tabs");
+  if (!bar) return;
+  const cfg = MODES[currentMode] || MODES.blocks;
+  bar.innerHTML = cfg.sections.map((s) => `
+    <button type="button" class="side-chip" onclick="switchMainView('${s.id}')" aria-pressed="${s.id === currentMainView}" title="${esc((VIEW_TITLES[s.id] || [])[1] || s.label)}">${esc(s.label)}</button>
+  `).join("");
+}
+window.renderSectionTabs = renderSectionTabs;
 
-  const viewBtns = { blocks: "nav-blocks", summary: "nav-summary", sim: "nav-sim", cicd: "nav-cicd", redteam: "nav-redteam", quiz: "nav-quiz", arch: "nav-arch", deep: "nav-deep" };
-  Object.entries(viewBtns).forEach(([m, id]) => {
-    const btn = document.getElementById(id);
-    if (btn) btn.classList.toggle("active", m === mode);
+function switchMainView(section) {
+  const sec = SECTION_MODE[section] ? section : "blocks";
+  currentMainView = sec;
+  currentMode = SECTION_MODE[sec];
+
+  Object.entries(MODES).forEach(([m, cfg]) => {
+    const btn = document.getElementById(cfg.btn);
+    if (btn) btn.setAttribute("aria-pressed", String(m === currentMode));
   });
+  renderSectionTabs();
 
-  const titles = VIEW_TITLES[mode] || VIEW_TITLES.blocks;
+  const titles = VIEW_TITLES[sec] || VIEW_TITLES.blocks;
   const titleEl = document.getElementById("view-title");
   const subEl = document.getElementById("view-sub");
   if (titleEl) titleEl.textContent = titles[0];
   if (subEl) subEl.textContent = titles[1];
 
-  Object.entries({ summary: "summary-view", sim: "sim-view", cicd: "cicd-view", redteam: "redteam-view", quiz: "quiz-view", arch: "arch-view", deep: "deep-view" }).forEach(([m, id]) => {
-    const el = document.getElementById(id);
-    if (el) el.classList.toggle("active", m === mode);
+  // overlay ของแต่ละ section ("blocks" ไม่มี overlay — โค้ดอยู่ใน layout หลัก)
+  Object.keys(SECTION_MODE).forEach((id) => {
+    const el = document.getElementById(`${id}-view`);
+    if (el) el.classList.toggle("active", id === sec && id !== "blocks");
   });
+  const panes = document.getElementById("blocks-panes");
+  if (panes) panes.classList.toggle("hidden", sec !== "blocks");
 
-  const inspector = document.getElementById("inspector");
-  if (inspector) inspector.classList.toggle("inspector-hidden", mode !== "blocks");
+  const showRail = sec === "blocks";
+  const rail = document.getElementById("inspector");
+  if (rail) {
+    rail.classList.toggle("inspector-hidden", !showRail);
+    if (!showRail) rail.classList.remove("rail-open");
+  }
+  const shell = document.getElementById("app-shell");
+  if (shell) shell.classList.toggle("rail-off", !showRail);
 
   const reader = document.getElementById("line-reader");
-  if (reader) reader.hidden = mode !== "blocks";   // ตัวอ่านบรรทัดผูกกับโหมดเจาะสเต็ปเท่านั้น
+  if (reader) reader.hidden = sec !== "blocks";   // ตัวอ่านบรรทัดผูกกับโหมดเจาะสเต็ปเท่านั้น
+  const stepNav = document.getElementById("step-nav");
+  if (stepNav) stepNav.classList.toggle("hidden", sec !== "blocks");
 
-  if (mode === "blocks") {
+  if (sec === "blocks") {
     selectStep(currentStepIndex);
-  } else if (mode === "summary") {
+    renderInspector();
+  } else if (sec === "summary") {
     renderSummaryView();
-  } else if (mode === "sim") {
+  } else if (sec === "sim") {
     renderSimulatorView();
-  } else if (mode === "cicd") {
+  } else if (sec === "cicd") {
     renderCicdView();
-  } else if (mode === "redteam") {
+  } else if (sec === "redteam") {
     renderRedteamView();
-  } else if (mode === "quiz") {
+  } else if (sec === "quiz") {
     renderQuizView();
-  } else if (mode === "arch") {
+  } else if (sec === "arch") {
     renderArchView();
-  } else if (mode === "deep") {
+  } else if (sec === "deep") {
     renderDeepView();
   }
 }
+window.switchMainView = switchMainView;
 
 // ===== Mobile (จอเล็ก: โชว์ pane เดียว + แถบเลือกไฟล์ 19 ไฟล์) =====
 function renderMobileTabs() {
@@ -953,11 +1095,6 @@ function jumpToCodeLine(fileKey, line, syncStep = true) {
       renderInspector();
       start = LOGICAL_STEPS[idx].gRange[0];
       end = LOGICAL_STEPS[idx].gRange[1];
-      const rightBadge = document.getElementById("pane-right-badge");
-      if (rightBadge) {
-        rightBadge.textContent = "Callee (เชื่อมโยง)";
-        rightBadge.classList.add("owner-callee");
-      }
     }
   }
 
@@ -1077,11 +1214,39 @@ function renderQuizView() {
   el.innerHTML = qnaHtml + quizHtml;
 }
 
-// ===== Keyboard (A/D หรือลูกศร · ↑/↓ เลื่อนบรรทัดที่ปักหมุด) =====
+// ===== Keyboard: A/D หรือลูกศร · ↑/↓ อ่านต่อ · 1-4 สลับโหมด · [ ] สลับไฟล์ · f ค้นไฟล์ =====
+const MODE_KEYS = { "1": "blocks", "2": "sim", "3": "system", "4": "drill" };
+const MODE_FIRST_SECTION = { blocks: "blocks", sim: "sim", system: "arch", drill: "quiz" };
+
+function cycleFile(dir) {
+  const pane = focusedPane;
+  const list = FILE_META.filter((f) => f.pane === pane);
+  if (!list.length) return;
+  const cur = list.findIndex((f) => f.key === paneFileKey(pane));
+  const next = list[(cur + dir + list.length) % list.length];
+  if (window.innerWidth < 1024) switchMobilePane(next.key);
+  else switchFileTab(pane, next.key);
+}
+window.cycleFile = cycleFile;
+
 window.addEventListener("keydown", (e) => {
   const tag = (e.target && e.target.tagName) || "";
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-  if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+  if (MODE_KEYS[e.key]) {
+    switchMainView(MODE_FIRST_SECTION[MODE_KEYS[e.key]]);
+    e.preventDefault();
+  } else if (e.key === "[" ) {
+    cycleFile(-1);
+    e.preventDefault();
+  } else if (e.key === "]") {
+    cycleFile(1);
+    e.preventDefault();
+  } else if (e.key === "f" || e.key === "F") {
+    focusFileList(focusedPane);
+    e.preventDefault();
+  } else if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") {
     if (currentMainView === "sim") simGo(simStepIndex + 1); else nextStep();
   } else if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") {
     if (currentMainView === "sim") simGo(simStepIndex - 1); else prevStep();
@@ -1096,7 +1261,9 @@ window.addEventListener("keydown", (e) => {
     }
     if (movePin(dir * stepSize)) e.preventDefault();
   } else if (e.key === "Escape") {
-    if (pinnedLine) { clearPinned(); e.preventDefault(); }
+    const rail = document.getElementById("inspector");
+    if (rail && rail.classList.contains("rail-open")) { rail.classList.remove("rail-open"); e.preventDefault(); }
+    else if (pinnedLine) { clearPinned(); e.preventDefault(); }
   }
 });
 
@@ -1104,12 +1271,17 @@ window.addEventListener("keydown", (e) => {
 window.addEventListener("DOMContentLoaded", () => {
   initFileMeta();       // สร้าง FILE_META ก่อนใช้งาน (อ้างอิง RAW_* จาก data-code.js)
   buildFileGraph();     // กราฟความสัมพันธ์ 19 ไฟล์ คำนวณจากโค้ดจริง
-  renderCodePanes();      // tabs + panes + inspector
+  renderCodePanes();    // โค้ด 2 pane + หัว pane + แผลข้างขวา
   renderSummaryView();
   renderMobileTabs();
-  renderStepUI();         // dots + ribbon
-  selectStep(0);          // ไฮไลต์สเต็ป 1 + ซิงก์ badge ขวา
+  renderStepUI();       // step chips + ribbon
+  switchMainView("blocks");
   switchMobilePane("pipeline");
+  // เปิด/ปิดแผลข้างขวาตามความกว้างจอจริง
+  window.addEventListener("resize", () => {
+    const rail = document.getElementById("inspector");
+    if (rail && window.innerWidth >= 1280) rail.classList.remove("rail-open");
+  });
 });
 
 // ===== สถาปัตยกรรมเชิงลึก: 7 ชั้น + สแต็กเลเยอร์ + ระบบไฮไลต์ + วิธีเรนเดอร์ =====
