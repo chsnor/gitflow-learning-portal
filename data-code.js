@@ -1,86 +1,139 @@
 // ============================================================
-// data-code.js — โค้ดจริงทั้ง 19 ไฟล์จากโปรเจกต์ D:\git_flowcahrt
+// data-code.js — โค้ดจริงทั้ง 18 ไฟล์ (14 ไฟล์โค้ด + 4 ไฟล์เทสต์) จากโปรเจกต์ D:\git_flowcahrt
 // (โหลดก่อน data-content.js เพราะ FILE_META อ้างอิง RAW_*)
 // ============================================================
 
-const RAW_PIPELINE = `// src/lib/pipeline.ts
+const RAW_PIPELINE = `import crypto from 'crypto';
 import { parseGitHubUrl, buildGitHubApiUrl, buildGitHubHeaders } from './github';
 import { filterTreeFiles, detectNextFileType, extractImportsFromCode, extractActionTriggers } from './parser';
-import { buildFlowElements, generateMermaidSyntax } from './generator';
+import { buildFlowElements } from './generator';
 import { AnalysisResult, GitHubTreeItem, CodeRelation, NextFileType, FlowNodeItem, FlowEdgeItem } from '../types';
 
 /**
- * ตัวแปรเก็บแคชในหน่วยความจำ (In-Memory Cache) ประจำเซิร์ฟเวอร์
- * เก็บผลการวิเคราะห์โดยใช้ URL เป็น Key เพื่อลดการยิง GitHub API ซ้ำซ้อน
+ * Compute partitioned cache key with SHA-256 token hash to prevent secret exposure and auth bypass.
  */
-export const pipelineCache = new Map<string, AnalysisResult>();
+function computeCacheKey(githubUrl: string, token?: string): string {
+  if (!token) return \`\${githubUrl}#public\`;
+  const tokenHash = crypto.createHash('sha256').update(token.trim()).digest('hex').slice(0, 16);
+  return \`\${githubUrl}#\${tokenHash}\`;
+}
 
-/**
- * ฟังก์ชันสำหรับล้างแคชทั้งหมด (ใช้สำหรับรัน Unit Test หรือรีเซ็ตระบบ)
- */
-export function clearPipelineCache(): void {
-  pipelineCache.clear();
+const MAX_CACHE_ENTRIES = 50;
+const CACHE_TTL_MS = 60 * 60 * 1000;
+
+interface CacheItem {
+  result: AnalysisResult;
+  timestamp: number;
 }
 
 /**
- * ฟังก์ชันสำหรับแปลงเส้นทาง Import (เช่น '@/store/gameStore' หรือ './GameCard')
- * ให้ตรงกับที่อยู่ไฟล์จริงใน Repository (เช่น 'src/store/gameStore.ts')
+ * In-memory LRU cache with TTL eviction policy to prevent memory leaks and redundant API calls.
  */
-export function resolveImportToFilePath(
+class BoundedLRUCache {
+  private cache = new Map<string, CacheItem>();
+
+  get(key: string): AnalysisResult | undefined {
+    const item = this.cache.get(key);
+    if (!item) return undefined;
+
+    if (Date.now() - item.timestamp > CACHE_TTL_MS) {
+      this.cache.delete(key);
+      return undefined;
+    }
+
+    this.cache.delete(key);
+    this.cache.set(key, item);
+    return item.result;
+  }
+
+  set(key: string, result: AnalysisResult): void {
+    if (this.cache.has(key)) {
+      this.cache.delete(key);
+    } else if (this.cache.size >= MAX_CACHE_ENTRIES) {
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey) this.cache.delete(oldestKey);
+    }
+    this.cache.set(key, { result, timestamp: Date.now() });
+  }
+
+  has(key: string): boolean {
+    return this.get(key) !== undefined;
+  }
+}
+
+export const pipelineCache = new BoundedLRUCache();
+
+const COMMON_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.jsx', '/index.ts', '/index.tsx', '/index.js'];
+
+/**
+ * Resolve alias imports (@/ or ~/) against repository file paths.
+ */
+function resolveAliasImport(rawTarget: string, allFilePaths: string[]): string | null {
+  const clean = rawTarget.slice(2);
+  for (const prefix of ['src/', '']) {
+    for (const ext of COMMON_EXTENSIONS) {
+      const candidate = \`\${prefix}\${clean}\${ext}\`.toLowerCase();
+      const match = allFilePaths.find((p) => p.toLowerCase() === candidate);
+      if (match) return match;
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve relative import targets (./ or ../) relative to source file directory.
+ */
+function resolveRelativeImport(cleanTarget: string, sourcePath: string, allFilePaths: string[]): string | null {
+  const sourceDir = sourcePath.includes('/') ? sourcePath.slice(0, sourcePath.lastIndexOf('/')) : '';
+  const parts = sourceDir ? sourceDir.split('/') : [];
+  
+  for (const seg of cleanTarget.split('/')) {
+    if (seg === '.' || !seg) continue;
+    if (seg === '..') parts.pop();
+    else parts.push(seg);
+  }
+
+  const resolvedBase = parts.join('/');
+  for (const ext of COMMON_EXTENSIONS) {
+    const candidate = \`\${resolvedBase}\${ext}\`.toLowerCase();
+    const match = allFilePaths.find((p) => p.toLowerCase() === candidate);
+    if (match) return match;
+  }
+  return null;
+}
+
+/**
+ * Map import target specifiers to concrete file paths within the repository.
+ */
+function resolveImportToFilePath(
   importTarget: string,
   sourcePath: string,
   allFilePaths: string[]
 ): string | null {
   if (!importTarget) return null;
   const cleanTarget = importTarget.replace(/['"]/g, '').trim();
-  const extensions = ['', '.ts', '.tsx', '.js', '.jsx', '/index.ts', '/index.tsx', '/index.js'];
 
-  // 1. Alias imports (@/ หรือ ~/)
   if (cleanTarget.startsWith('@/') || cleanTarget.startsWith('~/')) {
-    const raw = cleanTarget.slice(2);
-    for (const prefix of ['src/', '']) {
-      for (const ext of extensions) {
-        const candidate = prefix + raw + ext;
-        const found = allFilePaths.find((p) => p.toLowerCase() === candidate.toLowerCase());
-        if (found) return found;
-      }
-    }
+    return resolveAliasImport(cleanTarget, allFilePaths);
   }
 
-  // 2. Relative imports (./ หรือ ../)
   if (cleanTarget.startsWith('.')) {
-    const sourceDir = sourcePath.includes('/') ? sourcePath.slice(0, sourcePath.lastIndexOf('/')) : '';
-    const parts = sourceDir ? sourceDir.split('/') : [];
-    const segs = cleanTarget.split('/');
-    for (const seg of segs) {
-      if (seg === '.' || seg === '') continue;
-      if (seg === '..') parts.pop();
-      else parts.push(seg);
-    }
-    const resolvedBase = parts.join('/');
-    for (const ext of extensions) {
-      const candidate = resolvedBase + ext;
-      const found = allFilePaths.find((p) => p.toLowerCase() === candidate.toLowerCase());
-      if (found) return found;
-    }
+    return resolveRelativeImport(cleanTarget, sourcePath, allFilePaths);
   }
 
-  // 3. Fallback: ค้นหาจากชื่อไฟล์ (Base name match)
   const baseName = cleanTarget.split('/').pop()?.toLowerCase();
   if (baseName) {
-    const match = allFilePaths.find((p) => {
+    return allFilePaths.find((p) => {
       const fName = p.split('/').pop()?.replace(/\\.[^.]+$/, '').toLowerCase();
       return fName === baseName;
-    });
-    if (match) return match;
+    }) || null;
   }
 
   return null;
 }
 
 /**
- * ฟังก์ชันสร้างความสัมพันธ์เชิงโครงสร้าง (Structural Relations) จาก Next.js App Router Architecture
- * ทำงานอัตโนมัติจากโครงสร้างโฟลเดอร์และไฟล์ ไม่ต้องดึงโค้ดทุกไฟล์ ป้องกันการติด GitHub API Rate Limit
+ * Infer structural graph relations based on Next.js App Router conventions.
  */
 export function inferStructuralRelations(
   files: Array<{ path: string; fileType: NextFileType }>
@@ -97,147 +150,130 @@ export function inferStructuralRelations(
     }
   };
 
-  // 1. ค้นหา Entry Points หลัก (Middleware, Root Layout, Root Page)
-  const middlewareFile = files.find((f) => f.fileType === "middleware");
+  const middlewareFile = files.find((f) => f.fileType === 'middleware');
   const rootLayout =
     files.find((f) => /(^|\\/)(src\\/)?app\\/layout\\.[jt]sx?$/.test(f.path)) ||
     files.find((f) => /(^|\\/)layout\\.[jt]sx?$/.test(f.path));
   const rootPage =
     files.find((f) => /(^|\\/)(src\\/)?app\\/page\\.[jt]sx?$/.test(f.path)) ||
     files.find((f) => /(^|\\/)page\\.[jt]sx?$/.test(f.path));
-  const rootEntry = rootLayout || rootPage || files.find((f) => f.fileType === "page");
+  const rootEntry = rootLayout || rootPage || files.find((f) => f.fileType === 'page');
 
   if (middlewareFile && rootEntry) {
     addRelation({
       source: middlewareFile.path,
       target: rootEntry.path,
-      type: "import",
-      label: "routes to",
+      type: 'import',
+      label: 'routes to',
     });
   }
 
-  // 2. แยกกลุ่มระหว่าง Route Files (อยู่ใน app/ หรือ pages/) กับ Shared Files (components, lib, store)
   const routeFiles = files.filter((f) => /(^|\\/)(app|pages)\\//.test(f.path));
   const otherFiles = files.filter((f) => !/(^|\\/)(app|pages)\\//.test(f.path));
 
-  // 3. สร้างผังเส้นทางหลักของ Next.js ตาม Folder Hierarchy
   const routeDirMap = new Map<string, Array<{ path: string; fileType: NextFileType }>>();
   for (const file of routeFiles) {
-    const lastSlash = file.path.lastIndexOf("/");
-    const dir = lastSlash === -1 ? "" : file.path.substring(0, lastSlash);
+    const lastSlash = file.path.lastIndexOf('/');
+    const dir = lastSlash === -1 ? '' : file.path.substring(0, lastSlash);
     if (!routeDirMap.has(dir)) routeDirMap.set(dir, []);
     routeDirMap.get(dir)!.push(file);
   }
 
-  // เชื่อมโยงโฟลเดอร์แม่ -> โฟลเดอร์ลูกใน App Router
   for (const [dir, dirFiles] of routeDirMap.entries()) {
-    const pageInDir = dirFiles.find((f) => f.fileType === "page");
+    const pageInDir = dirFiles.find((f) => f.fileType === 'page');
     const layoutInDir = dirFiles.find((f) => /(^|\\/)layout\\.[jt]sx?$/.test(f.path));
     const mainAnchor = pageInDir || layoutInDir;
 
-    // ถ้าในโฟลเดอร์มีทั้ง layout และ page ให้ layout -> page
     if (layoutInDir && pageInDir && layoutInDir.path !== pageInDir.path) {
       addRelation({
         source: layoutInDir.path,
         target: pageInDir.path,
-        type: "import",
-        label: "renders",
+        type: 'import',
+        label: 'renders',
       });
     }
 
-    // Co-located actions หรือ route states ในโฟลเดอร์เดียวกัน
     for (const f of dirFiles) {
-      if (mainAnchor && f.path !== mainAnchor.path) {
-        if (f.fileType === "action") {
-          addRelation({
-            source: mainAnchor.path,
-            target: f.path,
-            type: "action",
-            label: "server action",
-          });
-        } else if (/(loading|error|not-found)\\.[jt]sx?$/.test(f.path)) {
-          addRelation({
-            source: mainAnchor.path,
-            target: f.path,
-            type: "import",
-            label: "route state",
-          });
-        }
+      if (!mainAnchor || f.path === mainAnchor.path) continue;
+      if (f.fileType === 'action') {
+        addRelation({
+          source: mainAnchor.path,
+          target: f.path,
+          type: 'action',
+          label: 'server action',
+        });
+      } else if (/(loading|error|not-found)\\.[jt]sx?$/.test(f.path)) {
+        addRelation({
+          source: mainAnchor.path,
+          target: f.path,
+          type: 'import',
+          label: 'route state',
+        });
       }
     }
 
-    // เชื่อมจาก Root Entry หรือ Parent Route มายัง Route นี้
     if (dir && mainAnchor) {
-      const lastSlash = dir.lastIndexOf("/");
-      const parentDir = lastSlash === -1 ? "" : dir.substring(0, lastSlash);
+      const lastSlash = dir.lastIndexOf('/');
+      const parentDir = lastSlash === -1 ? '' : dir.substring(0, lastSlash);
       const parentFiles = routeDirMap.get(parentDir);
 
       if (parentFiles) {
-        const parentLayout = parentFiles.find((f) => /(^|\\/)layout\\.[jt]sx?$/.test(f.path));
-        const parentPage = parentFiles.find((f) => f.fileType === "page");
-        const parentAnchor = parentLayout || parentPage;
+        const parentAnchor = parentFiles.find((f) => /(^|\\/)layout\\.[jt]sx?$/.test(f.path)) || parentFiles.find((f) => f.fileType === 'page');
         if (parentAnchor && parentAnchor.path !== mainAnchor.path) {
           addRelation({
             source: parentAnchor.path,
             target: mainAnchor.path,
-            type: "import",
-            label: "sub-route",
+            type: 'import',
+            label: 'sub-route',
           });
         }
       } else if (rootEntry && rootEntry.path !== mainAnchor.path) {
         addRelation({
           source: rootEntry.path,
           target: mainAnchor.path,
-          type: "import",
-          label: "sub-route",
+          type: 'import',
+          label: 'sub-route',
         });
       }
     }
   }
 
-  // 4. เชื่อมโยง Components / Stores / Shared Files ไปยังหน้าที่เกี่ยวข้องอย่างเจาะจง
-  const allPages = routeFiles.filter((f) => f.fileType === "page");
+  const allPages = routeFiles.filter((f) => f.fileType === 'page');
   for (const item of otherFiles) {
-    const itemName = item.path.split("/").pop()?.replace(/\\.[^.]+$/, "").toLowerCase() || "";
+    const itemName = item.path.split('/').pop()?.replace(/\\.[^.]+$/, '').toLowerCase() || '';
 
-    // ค้นหาหน้าที่เกี่ยวข้องจากชื่อ เช่น CourseCard -> /courses, BandCard -> /bands, GameExplorer -> /games
-    // รองรับการตัด s พหูพจน์ของ route เช่น bands -> band, games -> game, courses -> course
     let matchedPage = allPages.find((p) => {
-      const pageRoute = p.path.toLowerCase();
-      const segments = pageRoute.split("/").filter((s) => s && s !== "src" && s !== "app" && !s.startsWith("page."));
+      const segments = p.path.toLowerCase().split('/').filter((s) => s && s !== 'src' && s !== 'app' && !s.startsWith('page.'));
       return segments.some((seg) => {
-        const cleanSeg = seg.replace(/[[\\]]/g, "");
-        const stem = cleanSeg.endsWith("s") && cleanSeg.length > 3 ? cleanSeg.slice(0, -1) : cleanSeg;
+        const cleanSeg = seg.replace(/[[\\]]/g, '');
+        const stem = cleanSeg.endsWith('s') && cleanSeg.length > 3 ? cleanSeg.slice(0, -1) : cleanSeg;
         return (stem.length >= 3 && itemName.includes(stem)) || (cleanSeg.length >= 3 && itemName.includes(cleanSeg));
       });
     });
 
-    // ถ้าไม่ตรงกับ Route ไหนเลย (เช่น ButtonComponent, MemberItem, Navbar) ให้ผูกกับ rootEntry หรือหน้าแรก
     if (!matchedPage) {
       matchedPage = rootEntry || allPages[0];
     }
 
     if (matchedPage) {
-      const isFeatureMatch = matchedPage !== rootEntry;
       addRelation({
         source: matchedPage.path,
         target: item.path,
-        type: "import",
-        label: isFeatureMatch ? "uses component" : "shared UI",
+        type: 'import',
+        label: matchedPage !== rootEntry ? 'uses component' : 'shared UI',
       });
     }
 
-    // 4.1 ถ้าไฟล์นี้เป็น store ให้เชื่อมโยงคอมโพเนนต์ในฟีเจอร์เดียวกันมาหา store ด้วย
-    if (item.fileType === "store") {
-      const stem = itemName.replace(/store$/, "");
+    if (item.fileType === 'store') {
+      const stem = itemName.replace(/store$/, '');
       if (stem.length >= 3) {
         for (const comp of otherFiles) {
-          if (comp.fileType === "component" && comp.path.toLowerCase().includes(stem)) {
+          if (comp.fileType === 'component' && comp.path.toLowerCase().includes(stem)) {
             addRelation({
               source: comp.path,
               target: item.path,
-              type: "import",
-              label: "uses store",
+              type: 'import',
+              label: 'uses store',
             });
           }
         }
@@ -245,7 +281,6 @@ export function inferStructuralRelations(
     }
   }
 
-  // 5. Fallback ปลอดภัยกรณีโปรเจกต์ไม่ได้ใช้โครงสร้าง app/ หรือ pages/
   if (relations.length === 0 && files.length > 1) {
     const anchor = rootEntry || files[0];
     for (let i = 1; i < Math.min(files.length, 10); i++) {
@@ -253,8 +288,8 @@ export function inferStructuralRelations(
         addRelation({
           source: anchor.path,
           target: files[i].path,
-          type: "import",
-          label: "references",
+          type: 'import',
+          label: 'references',
         });
       }
     }
@@ -264,30 +299,162 @@ export function inferStructuralRelations(
 }
 
 /**
- * ฟังก์ชัน Pipeline รวบยอดทั้งระบบ (คนที่ 6 รับผิดชอบ)
- * ทำหน้าที่เชื่อมโยงการทำงานจากโมดูลของสมาชิกทุกคนตั้งแต่ต้นน้ำจนถึงปลายน้ำ
- * พร้อมระบบ In-Memory Cache และการวัด Performance
+ * Fetch repository tree structure from GitHub API with automatic branch detection.
+ */
+async function fetchGitHubTree(
+  owner: string,
+  repo: string,
+  initialBranch: string,
+  token?: string
+): Promise<{ treeData: GitHubTreeItem[]; activeBranch: string }> {
+  let activeBranch = initialBranch;
+
+  try {
+    let response = await fetch(
+      buildGitHubApiUrl(owner, repo, activeBranch),
+      { headers: buildGitHubHeaders(token) }
+    );
+
+    if (response.status === 404 && activeBranch === 'main') {
+      const fallbackResponse = await fetch(
+        buildGitHubApiUrl(owner, repo, 'master'),
+        { headers: buildGitHubHeaders(token) }
+      );
+      if (fallbackResponse.ok) {
+        response = fallbackResponse;
+        activeBranch = 'master';
+      }
+    }
+
+    if (response.status === 404) {
+      try {
+        const repoInfoRes = await fetch(
+          \`https://api.github.com/repos/\${owner}/\${repo}\`,
+          { headers: buildGitHubHeaders(token) }
+        );
+        if (repoInfoRes.ok) {
+          const repoData = await repoInfoRes.json();
+          const detectedDefaultBranch = repoData.default_branch;
+          if (detectedDefaultBranch && detectedDefaultBranch !== 'main' && detectedDefaultBranch !== 'master') {
+            const detectedBranchRes = await fetch(
+              buildGitHubApiUrl(owner, repo, detectedDefaultBranch),
+              { headers: buildGitHubHeaders(token) }
+            );
+            if (detectedBranchRes.ok) {
+              response = detectedBranchRes;
+              activeBranch = detectedDefaultBranch;
+            }
+          }
+        }
+      } catch {}
+    }
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('❌ GitHub Token ไม่ถูกต้อง (401 Bad credentials) กรุณาตรวจสอบ Token อีกครั้ง หรือเว้นว่างไว้เพื่อใช้งานแบบสาธารณะ');
+      }
+      if (response.status === 404) {
+        throw new Error('❌ ไม่พบคลังโค้ดนี้บน GitHub หรือไม่พบ Branch');
+      }
+      if (response.status === 403) {
+        throw new Error('❌ GitHub API ติด Rate Limit หรือ Access Denied กรุณาแนบ Personal Access Token เพื่อเพิ่มโควต้า');
+      }
+      throw new Error(\`GitHub API Error: \${response.status}\`);
+    }
+
+    const json = await response.json();
+    return {
+      treeData: Array.isArray(json.tree) ? json.tree : [],
+      activeBranch,
+    };
+  } catch (error: unknown) {
+    const err = error as { message?: string };
+    if (err?.message && (err.message.includes('❌') || err.message.includes('401') || err.message.includes('Rate Limit'))) {
+      throw error;
+    }
+    throw new Error('ไม่สามารถเชื่อมต่อ GitHub ได้ กรุณาตรวจสอบการเชื่อมต่อหรือแนบ Token');
+  }
+}
+
+/**
+ * Extract imports and action triggers from fetched raw file contents.
+ */
+function extractRelationsFromContent(
+  filesContent: Record<string, string>,
+  filesWithTypes: Array<{ path: string; fileType: NextFileType }>,
+  allPaths: string[]
+): CodeRelation[] {
+  const relations: CodeRelation[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const [filePath, content] of Object.entries(filesContent)) {
+    try {
+      const rawImports = extractImportsFromCode(filePath, content);
+      for (const imp of rawImports) {
+        const target = resolveImportToFilePath(imp.target, filePath, allPaths) || imp.target;
+        if (target && target !== filePath) {
+          const key = \`\${filePath}->\${target}\`;
+          if (!seenKeys.has(key)) {
+            seenKeys.add(key);
+            const targetType = filesWithTypes.find((f) => f.path === target)?.fileType ?? 'other';
+            const label =
+              targetType === 'store'
+                ? 'uses store'
+                : targetType === 'action'
+                ? 'server action'
+                : targetType === 'component'
+                ? 'uses component'
+                : 'imports';
+
+            relations.push({
+              source: filePath,
+              target,
+              type: targetType === 'store' ? 'import' : targetType === 'action' ? 'action' : 'import',
+              label,
+            });
+          }
+        }
+      }
+    } catch {}
+
+    try {
+      const rawActions = extractActionTriggers(filePath, content);
+      for (const act of rawActions) {
+        const target = resolveImportToFilePath(act.target, filePath, allPaths) || act.target;
+        const key = \`\${filePath}->\${target}:\${act.label}\`;
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
+          relations.push({
+            source: filePath,
+            target,
+            type: act.type,
+            label: act.label,
+          });
+        }
+      }
+    } catch {}
+  }
+
+  return relations;
+}
+
+/**
+ * Primary orchestration pipeline: ingest repository, classify files, infer relations, and generate flow elements.
  */
 export async function runAnalysisPipeline(
   githubUrl: string,
   token?: string,
   mockTreeData?: GitHubTreeItem[],
-  mockFilesContent?: Record<string, string>,
+  mockFilesContent?: Record<string, string>
 ): Promise<AnalysisResult> {
-  // TODO 6.1: เริ่มจับเวลาด้วย const startTime = performance.now()
   const startTime = performance.now();
-  // TODO 6.2: รับ URL และทำการแกะเจ้าของ/ชื่อคลังด้วย parseGitHubUrl (คนที่ 1)
-  let parsed = null;
 
+  let parsed = null;
   try {
     parsed = parseGitHubUrl(githubUrl);
   } catch {
-    // สำรองไว้ชั่วคราวระหว่างรอคนที่ 1 ทำงานเสร็จ
-    if (githubUrl && githubUrl.includes("github.com")) {
-      const parts = githubUrl
-        .replace(/\\.git$/, "")
-        .replace(/\\/+$/, "")
-        .split("/");
+    if (githubUrl && githubUrl.includes('github.com')) {
+      const parts = githubUrl.replace(/\\.git$/, '').replace(/\\/+$/, '').split('/');
       parsed = {
         owner: parts[parts.length - 2],
         repo: parts[parts.length - 1],
@@ -296,115 +463,63 @@ export async function runAnalysisPipeline(
   }
 
   if (!parsed || !parsed.owner || !parsed.repo) {
-    throw new Error("URL ต้องมาจาก github.com เท่านั้น");
+    throw new Error('URL ต้องมาจาก github.com เท่านั้น');
   }
 
   const { owner, repo } = parsed;
   let activeBranch = parsed.branch || 'main';
-  // TODO 6.3: ตรวจสอบ In-Memory Cache (pipelineCache)
-  //           - ถ้ามีข้อมูลในแคชแล้ว ให้คืนค่าจากแคชทันที พร้อมแนบ isCached: true และ executionTimeMs
-  if (pipelineCache.has(githubUrl)) {
-    const cachedResult = pipelineCache.get(githubUrl)!;
+  const effectiveToken = token?.trim() || process.env.GITHUB_TOKEN?.trim() || undefined;
+  const cacheKey = computeCacheKey(githubUrl, effectiveToken);
+
+  if (pipelineCache.has(cacheKey)) {
     return {
-      ...cachedResult,
+      ...pipelineCache.get(cacheKey)!,
       isCached: true,
       executionTimeMs: performance.now() - startTime,
     };
   }
-  // TODO 6.4: ดึงข้อมูลโครงสร้างโฟลเดอร์จาก GitHub API หรือใช้ mockTreeData (คนที่ 1)
-  let treeData: GitHubTreeItem[] = [];
 
+  let treeData: GitHubTreeItem[] = [];
   if (mockTreeData) {
     treeData = mockTreeData;
-    console.log("🔄 ใช้ Mock Tree Data (สำหรับการทดสอบภายใน)");
   } else {
-    try {
-      let response = await fetch(
-        buildGitHubApiUrl(owner, repo, activeBranch),
-        { headers: buildGitHubHeaders(token) },
-      );
-
-      // หากคลังไม่ได้ใช้ branch 'main' (เช่น โปรเจกต์เก่าที่ใช้ 'master') ให้ fallback อัตโนมัติ
-      if (response.status === 404 && activeBranch === 'main') {
-        const fallbackResponse = await fetch(
-          buildGitHubApiUrl(owner, repo, 'master'),
-          { headers: buildGitHubHeaders(token) },
-        );
-        if (fallbackResponse.ok) {
-          response = fallbackResponse;
-          activeBranch = 'master';
-        }
-      }
-
-      if (!response.ok) {
-        // ถ้า Error 404 ไม่พบคลังโค้ดหรือ branch
-        if (response.status === 404) {
-          throw new Error("❌ ไม่พบคลังโค้ดนี้บน GitHub หรือไม่พบ Branch main/master");
-        }
-        // ถ้า Error 403 Forbidden ให้แนะนำให้ใส่ Token ใน .env
-        if (response.status === 403) {
-          throw new Error(
-            "❌ GitHub API Rate Limit หรือ Access Denied. กรุณาเพิ่ม GitHub Token ในไฟล์ .env",
-          );
-        }
-        throw new Error(\`GitHub API Error: \${response.status}\`);
-      }
-
-      const json = await response.json();
-      if (Array.isArray(json.tree)) {
-        treeData = json.tree;
-      }
-    } catch (error: any) {
-      if (error?.message && error.message.includes("❌")) {
-        throw error;
-      }
-      console.error("❌ ไม่สามารถเชื่อมต่อ GitHub ได้:", error);
-      throw new Error(
-        "ไม่สามารถเชื่อมต่อ GitHub ได้ กรุณาตรวจสอบอินเทอร์เน็ตหรือแนบ Token",
-      );
-    }
+    const fetched = await fetchGitHubTree(owner, repo, activeBranch, effectiveToken);
+    treeData = fetched.treeData;
+    activeBranch = fetched.activeBranch;
   }
-  // TODO 6.5: นำรายการไฟล์มาคัดกรองด้วย filterTreeFiles (คนที่ 2)
-  // กรองไฟล์ที่ไม่เกี่ยวข้องทิ้ง (ใช้ฟังก์ชันคนที่ 2)
+
   let filteredItems: GitHubTreeItem[] = [];
   try {
     filteredItems = filterTreeFiles(treeData, 500);
   } catch {
-    // โค้ดสำรองระหว่างรอคนที่ 2: กรองเอาเฉพาะไฟล์ blob และนามสกุลโค้ด
     filteredItems = treeData.filter(
       (item) =>
-        item.type === "blob" &&
-        !item.path.includes("node_modules") &&
-        !item.path.includes(".next") &&
-        !item.path.endsWith(".d.ts") &&
-        /\\.(tsx?|jsx?)$/.test(item.path),
+        item.type === 'blob' &&
+        !item.path.includes('node_modules') &&
+        !item.path.includes('.next') &&
+        !item.path.endsWith('.d.ts') &&
+        /\\.(tsx?|jsx?)$/.test(item.path)
     ).slice(0, 500);
   }
-  // TODO 6.6: จำแนกประเภทของแต่ละไฟล์ด้วย detectNextFileType (คนที่ 2)
+
   const filesWithTypes = filteredItems.map((item) => {
-    let fileType: NextFileType = "other";
+    let fileType: NextFileType = 'other';
     try {
       fileType = detectNextFileType(item.path);
     } catch {
-      // โค้ดสำรองระหว่างรอคนที่ 2: เดาประเภทจากชื่อไฟล์คร่าวๆ
-      if (item.path.includes("page.")) fileType = "page";
-      else if (item.path.includes("actions")) fileType = "action";
-      else if (item.path.includes("middleware") || item.path.includes("proxy"))
-        fileType = "middleware";
-      else if (item.path.includes("store") || item.path.includes("context"))
-        fileType = "store";
-      else if (item.path.includes("components/")) fileType = "component";
+      if (item.path.includes('page.')) fileType = 'page';
+      else if (item.path.includes('actions')) fileType = 'action';
+      else if (item.path.includes('middleware') || item.path.includes('proxy')) fileType = 'middleware';
+      else if (item.path.includes('store') || item.path.includes('context')) fileType = 'store';
+      else if (item.path.includes('components/')) fileType = 'component';
     }
     return { path: item.path, fileType };
   });
-  // TODO 6.7: สกัดความสัมพันธ์ Imports และ Action/Event Triggers จากโค้ดจริง (คนที่ 2)
-  const relations: CodeRelation[] = [];
-  const allPaths = filesWithTypes.map((f) => f.path);
-  const seenRelKeys = new Set<string>();
 
+  const allPaths = filesWithTypes.map((f) => f.path);
+  let relations: CodeRelation[] = [];
   let filesContentToProcess: Record<string, string> | null = mockFilesContent || null;
 
-  // สำหรับการวิเคราะห์คลังจริงบน GitHub (เมื่อไม่ได้รัน mockTreeData) ให้ดึงไฟล์จริงผ่าน CDN เพื่อแกะ import จริง
   if (!filesContentToProcess && !mockTreeData && filesWithTypes.length > 0) {
     try {
       const candidates = filesWithTypes.slice(0, 45);
@@ -412,14 +527,9 @@ export async function runAnalysisPipeline(
         try {
           const rawUrl = \`https://raw.githubusercontent.com/\${owner}/\${repo}/\${activeBranch}/\${f.path}\`;
           const headers: Record<string, string> = {};
-          if (token) headers['Authorization'] = \`Bearer \${token}\`;
-          const res = await fetch(rawUrl, {
-            headers,
-            signal: AbortSignal.timeout(4000),
-          });
-          if (!res.ok) return { path: f.path, text: '' };
-          const text = await res.text();
-          return { path: f.path, text };
+          if (effectiveToken) headers['Authorization'] = \`Bearer \${effectiveToken}\`;
+          const res = await fetch(rawUrl, { headers, signal: AbortSignal.timeout(4000) });
+          return res.ok ? { path: f.path, text: await res.text() } : { path: f.path, text: '' };
         } catch {
           return { path: f.path, text: '' };
         }
@@ -434,90 +544,25 @@ export async function runAnalysisPipeline(
           hasValidContent = true;
         }
       }
-      if (hasValidContent) {
-        filesContentToProcess = contentMap;
-      }
-    } catch {
-      // Fallback ปลอดภัยหากเครือข่ายล่ม
-    }
+      if (hasValidContent) filesContentToProcess = contentMap;
+    } catch {}
   }
 
   if (filesContentToProcess) {
-    for (const [filePath, content] of Object.entries(filesContentToProcess)) {
-      // 1. ดึงคำสั่ง import จริงจากโค้ด
-      try {
-        const rawImports = extractImportsFromCode(filePath, content);
-        for (const imp of rawImports) {
-          const resolved = resolveImportToFilePath(imp.target, filePath, allPaths);
-          const target = resolved || imp.target;
-          if (target && target !== filePath) {
-            const key = \`\${filePath}->\${target}\`;
-            if (!seenRelKeys.has(key)) {
-              seenRelKeys.add(key);
-              const targetType = filesWithTypes.find((f) => f.path === target)?.fileType ?? 'other';
-              const label =
-                targetType === 'store'
-                  ? 'uses store'
-                  : targetType === 'action'
-                  ? 'server action'
-                  : targetType === 'component'
-                  ? 'uses component'
-                  : 'imports';
-
-              relations.push({
-                source: filePath,
-                target,
-                type: targetType === 'store' ? 'import' : targetType === 'action' ? 'action' : 'import',
-                label,
-              });
-            }
-          }
-        }
-      } catch {}
-
-      // 2. ดึง Event / Server Action
-      try {
-        const rawActions = extractActionTriggers(filePath, content);
-        for (const act of rawActions) {
-          const resolved = resolveImportToFilePath(act.target, filePath, allPaths);
-          const target = resolved || act.target;
-          const key = \`\${filePath}->\${target}:\${act.label}\`;
-          if (!seenRelKeys.has(key)) {
-            seenRelKeys.add(key);
-            relations.push({
-              source: filePath,
-              target,
-              type: act.type,
-              label: act.label,
-            });
-          }
-        }
-      } catch {
-        if (content.includes("action={updateProductAction}")) {
-          relations.push({
-            source: filePath,
-            target: "src/app/products/actions.ts",
-            type: "action",
-            label: "form action",
-          });
-        }
-      }
-    }
+    relations = extractRelationsFromContent(filesContentToProcess, filesWithTypes, allPaths);
   }
 
-  // หากไม่มี mockFilesContent หรือยังไม่มี relations จากการแกะโค้ด ให้สร้างความสัมพันธ์เชิงโครงสร้างจาก App Router อัตโนมัติ
   if (relations.length === 0 && filesWithTypes.length > 0) {
     relations.push(...inferStructuralRelations(filesWithTypes));
   }
-  // 1. สร้างโหนดและเส้นเชื่อมสำหรับ React Flow
-  let flowElements: { nodes: FlowNodeItem[]; edges: FlowEdgeItem[] } = { nodes: [], edges: [] };
+
+  let flowElements: { nodes: FlowNodeItem[]; edges: FlowEdgeItem[] };
   try {
     flowElements = buildFlowElements(filesWithTypes, relations);
   } catch {
-    // โค้ดสำรองระหว่างรอคนที่ 3: คำนวณพิกัด X, Y เบื้องต้น
     flowElements = {
       nodes: filesWithTypes.map((f, idx) => ({
-        id: f.path.replace(/[^a-zA-Z0-9]/g, "_"),
+        id: f.path.replace(/[^a-zA-Z0-9]/g, '_'),
         label: f.path,
         fileType: f.fileType,
         path: f.path,
@@ -525,62 +570,44 @@ export async function runAnalysisPipeline(
       })),
       edges: relations.map((r, idx) => ({
         id: \`e-\${idx}\`,
-        source: r.source.replace(/[^a-zA-Z0-9]/g, "_"),
-        target: r.target.replace(/[^a-zA-Z0-9]/g, "_"),
+        source: r.source.replace(/[^a-zA-Z0-9]/g, '_'),
+        target: r.target.replace(/[^a-zA-Z0-9]/g, '_'),
         label: r.label,
-        animated: r.type === "action",
+        animated: r.type === 'action',
       })),
     };
   }
 
-  // 2. สร้างโค้ด Mermaid Syntax สำหรับ Export
-  let mermaidSyntax = "graph TD\\n";
-  try {
-    mermaidSyntax = generateMermaidSyntax(relations);
-  } catch {
-    mermaidSyntax = 'graph TD\\n  Start["Repo Root"]';
-  }
-  // TODO 6.9: บันทึกผลลัพธ์ลง pipelineCache.set(githubUrl, result) เพื่อใช้ในครั้งต่อไป
-    const finalResult: AnalysisResult = {
-      repoName: repo,
-      owner,
-      branch: activeBranch,
-      totalFiles: treeData.length,
-      filteredFilesCount: filteredItems.length,
-      relations,
-      nodes: flowElements.nodes,
-      edges: flowElements.edges,
-      mermaidSyntax,
-      isCached: false,
-      executionTimeMs: performance.now() - startTime,
-    };
+  const finalResult: AnalysisResult = {
+    repoName: repo,
+    owner,
+    branch: activeBranch,
+    totalFiles: treeData.length,
+    filteredFilesCount: filteredItems.length,
+    relations,
+    nodes: flowElements.nodes,
+    edges: flowElements.edges,
+    mermaidSyntax: '',
+    isCached: false,
+    executionTimeMs: performance.now() - startTime,
+  };
 
-    // บันทึกลง In-Memory Cache
-    pipelineCache.set(githubUrl, finalResult);
-
-    return finalResult;
-  // TODO 6.10: ส่งคืน AnalysisResult ที่สมบูรณ์ พร้อมแนบ isCached: false และ executionTimeMs
-  // TODO 6.11 (Network Safety Guard): ครอบ try-catch หากยิง GitHub ไม่สำเร็จ (เช่น เน็ตหลุด หรือติด Rate Limit 403) 
-  //            ให้โยน Error ที่มีข้อความชัดเจน เช่น "ไม่สามารถเชื่อมต่อ GitHub ได้ กรุณาตรวจสอบอินเทอร์เน็ตหรือแนบ Token"
-  
-}   
+  pipelineCache.set(cacheKey, finalResult);
+  return finalResult;
+}
 `;
 
-const RAW_ROUTE = `// src/app/api/analyze/route.ts
-import { NextRequest, NextResponse } from "next/server";
+const RAW_ROUTE = `import { NextRequest, NextResponse } from "next/server";
 import { runAnalysisPipeline } from "../../../lib/pipeline";
 
 /**
- * API Route สำหรับการวิเคราะห์โครงสร้างคลังโค้ด (คนที่ 6 รับผิดชอบ)
- * ทำหน้าที่เป็น Endpoint หลังบ้านรับคำขอจากหน้าเว็บ (คนที่ 4) เพื่อส่งเข้าสู่ Pipeline
+ * Handle repository analysis request and dispatch orchestration pipeline.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
-    // 6.13: รับ body จากคำขอ
     const body = await req.json();
     const { url, token } = body;
 
-    // 6.14: ตรวจสอบ URL
     if (!url) {
       return NextResponse.json(
         { error: "กรุณาระบุ URL ของ GitHub Repository" },
@@ -588,24 +615,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       );
     }
 
-    // 6.15: เรียก Pipeline รันการวิเคราะห์
     const result = await runAnalysisPipeline(url, token);
-
-    // 6.16: ส่งผลลัพธ์กลับ
     return NextResponse.json(result, { status: 200 });
   } catch (error) {
-    // 6.17: จัดการ Error
     const errorMessage =
       error instanceof Error ? error.message : "เกิดข้อผิดพลาดในการประมวลผล";
+    const status = errorMessage.includes('401') ? 401 : 500;
     return NextResponse.json(
       { error: errorMessage },
-      { status: 500 },
+      { status },
     );
   }
-}`;
+}
+`;
 
-const RAW_PARSER = `// src/lib/parser.ts
-import { GitHubTreeItem, CodeRelation, NextFileType } from '../types';
+const RAW_PARSER = `import { GitHubTreeItem, CodeRelation, NextFileType } from '../types';
 
 const BLACKLIST_FOLDERS = [
   'node_modules/',
@@ -661,55 +685,66 @@ const ALLOWED_ROOT_FILES = new Set([
 
 const VALID_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'];
 
+const RESERVED_IDENTIFIERS = new Set([
+  'async', 'await', 'return', 'function', 'true', 'false',
+  'null', 'undefined', 'e', 'event', 'evt', 'formData',
+  'console', 'log', 'preventDefault', 'stopPropagation', 'void'
+]);
+
+const COMPONENT_FOLDER_REGEX = /(^|\\/)_?(components?|ui|widgets?|views?)\\//i;
+const ACTION_FOLDER_REGEX = /(^|\\/)actions?\\//i;
+const STORE_FOLDER_REGEX = /(^|\\/)(stores?|contexts?|state)\\//i;
+const HOOK_FOLDER_REGEX = /(^|\\/)hooks?\\//i;
+const API_FOLDER_REGEX = /(^|\\/)api\\//i;
+const PAGES_ROUTER_REGEX = /(^|\\/)pages\\//i;
+
+const STORE_FILE_REGEX = /(?:[A-Z]tore|[-_.]stores?|^stores?)\\.(tsx?|jsx?)$/;
+const HOOK_FILE_REGEX = /^use[A-Z][\\w-]*\\.(tsx?|jsx?)$/;
+
 /**
- * คัดกรองเฉพาะไฟล์ซอร์สโค้ดจริง
- * กรองไฟล์ Config ระดับ Root, โฟลเดอร์ทดสอบ, และไฟล์ที่ไม่ใช่ส่วนหนึ่งของแอปพลิเคชันออกทั้งหมด
+ * Check whether a repository path should be ignored during tree filtering.
+ */
+function shouldIgnorePath(lowerPath: string, fileName: string, isRootFile: boolean): boolean {
+  if (fileName.startsWith('.')) return true;
+  if (BLACKLIST_FILES.has(fileName)) return true;
+  if (BLACKLIST_FOLDERS.some((folder) => lowerPath.includes(folder))) return true;
+
+  if (
+    fileName.endsWith('.d.ts') ||
+    fileName.includes('.config.') ||
+    fileName.includes('.test.') ||
+    fileName.includes('.spec.') ||
+    fileName.includes('.cy.') ||
+    fileName.includes('.min.')
+  ) {
+    return true;
+  }
+
+  if (!VALID_EXTENSIONS.some((ext) => fileName.endsWith(ext))) return true;
+  if (isRootFile && !ALLOWED_ROOT_FILES.has(fileName)) return true;
+
+  return false;
+}
+
+/**
+ * Filter Git tree items to keep only actionable Next.js source code files up to maxLimit.
  */
 export function filterTreeFiles(items: GitHubTreeItem[], maxLimit = 250): GitHubTreeItem[] {
   if (!Array.isArray(items)) return [];
 
   const filtered: GitHubTreeItem[] = [];
 
-  for (let i = 0; i < items.length; i++) {
+  for (const item of items) {
     if (filtered.length >= maxLimit) break;
-
-    const item = items[i];
     if (!item || item.type !== 'blob' || !item.path) continue;
 
-    const rawPath = item.path.replace(/\\\\/g, '/');
-    const lowerPath = rawPath.toLowerCase();
+    const normalizedPath = item.path.replace(/\\\\/g, '/');
+    const lowerPath = normalizedPath.toLowerCase();
     const lastSlash = lowerPath.lastIndexOf('/');
     const fileName = lastSlash !== -1 ? lowerPath.slice(lastSlash + 1) : lowerPath;
-
-    // 1. ข้ามไฟล์ซ่อน (เช่น .env, .gitignore)
-    if (fileName.startsWith('.')) continue;
-
-    // 2. ข้ามไฟล์ที่อยู่ใน Blacklist
-    if (BLACKLIST_FILES.has(fileName)) continue;
-
-    // 3. ข้ามโฟลเดอร์ที่ไม่เกี่ยวข้อง
-    if (BLACKLIST_FOLDERS.some((folder) => lowerPath.includes(folder))) continue;
-
-    // 4. ข้ามไฟล์ declaration (.d.ts), config (*.config.*), test (*.test.*, *.spec.*), minified (.min.*)
-    if (
-      fileName.endsWith('.d.ts') ||
-      fileName.includes('.config.') ||
-      fileName.includes('.test.') ||
-      fileName.includes('.spec.') ||
-      fileName.includes('.cy.') ||
-      fileName.includes('.min.')
-    ) {
-      continue;
-    }
-
-    // 5. ตรวจสอบนามสกุลไฟล์ซอร์สโค้ด (.ts, .tsx, .js, .jsx)
-    if (!VALID_EXTENSIONS.some((ext) => fileName.endsWith(ext))) {
-      continue;
-    }
-
-    // 6. กรองไฟล์ระดับ Root (กรณีไม่มี / ใน Path) ยกเว้น middleware และ proxy
     const isRootFile = lastSlash === -1;
-    if (isRootFile && !ALLOWED_ROOT_FILES.has(fileName)) {
+
+    if (shouldIgnorePath(lowerPath, fileName, isRootFile)) {
       continue;
     }
 
@@ -720,66 +755,43 @@ export function filterTreeFiles(items: GitHubTreeItem[], maxLimit = 250): GitHub
 }
 
 /**
- * จำแนกประเภทของไฟล์ตามสถาปัตยกรรม Next.js
+ * Detect Next.js architectural file type (page, layout, api, action, store, hook, component).
  */
 export function detectNextFileType(filePath: string): NextFileType {
   if (!filePath || typeof filePath !== 'string') return 'other';
 
   const normalizedPath = filePath.replace(/\\\\/g, '/');
+  const lowerPath = normalizedPath.toLowerCase();
   const lastSlash = normalizedPath.lastIndexOf('/');
   const fileName = lastSlash !== -1 ? normalizedPath.slice(lastSlash + 1) : normalizedPath;
 
-  if (
-    fileName === 'middleware.ts' ||
-    fileName === 'middleware.js' ||
-    fileName === 'proxy.ts' ||
-    fileName === 'proxy.js'
-  ) {
+  if (ALLOWED_ROOT_FILES.has(fileName)) {
     return 'middleware';
   }
 
   if (/^page\\.(tsx|ts|jsx|js)$/.test(fileName)) return 'page';
   if (/^layout\\.(tsx|ts|jsx|js)$/.test(fileName)) return 'layout';
+  if (/^route\\.(tsx|ts|jsx|js)$/.test(fileName)) return 'api';
 
-  if (
-    /^actions?\\.(tsx|ts|jsx|js)$/.test(fileName) ||
-    normalizedPath.includes('/actions/') ||
-    normalizedPath.startsWith('actions/')
-  ) {
-    return 'action';
+  if (PAGES_ROUTER_REGEX.test(lowerPath)) {
+    return API_FOLDER_REGEX.test(normalizedPath) ? 'api' : 'page';
   }
 
-  if (
-    normalizedPath.includes('/stores/') ||
-    normalizedPath.includes('/context/') ||
-    normalizedPath.includes('/state/') ||
-    normalizedPath.startsWith('stores/') ||
-    normalizedPath.startsWith('context/') ||
-    normalizedPath.startsWith('state/')
-  ) {
-    return 'store';
-  }
+  if (API_FOLDER_REGEX.test(normalizedPath)) return 'api';
+  if (ACTION_FOLDER_REGEX.test(normalizedPath)) return 'action';
+  if (STORE_FOLDER_REGEX.test(normalizedPath)) return 'store';
+  if (HOOK_FOLDER_REGEX.test(normalizedPath)) return 'hook';
+  if (COMPONENT_FOLDER_REGEX.test(normalizedPath)) return 'component';
 
-  if (
-    /^route\\.(tsx|ts|jsx|js)$/.test(fileName) ||
-    normalizedPath.includes('/api/') ||
-    normalizedPath.startsWith('api/')
-  ) {
-    return 'api';
-  }
-
-  if (
-    normalizedPath.includes('/components/') ||
-    normalizedPath.startsWith('components/')
-  ) {
-    return 'component';
-  }
+  if (/^actions?\\.(tsx|ts|jsx|js)$/.test(fileName)) return 'action';
+  if (STORE_FILE_REGEX.test(fileName)) return 'store';
+  if (HOOK_FILE_REGEX.test(fileName)) return 'hook';
 
   return 'other';
 }
 
 /**
- * ดึงข้อมูลการ import โดยข้ามไฟล์ที่ไม่มีคำว่า import ด้วย String Guard Clause
+ * Extract internal project import relations from source code content.
  */
 export function extractImportsFromCode(sourcePath: string, codeContent: string): CodeRelation[] {
   if (!codeContent || typeof codeContent !== 'string' || !codeContent.includes('import')) {
@@ -789,22 +801,19 @@ export function extractImportsFromCode(sourcePath: string, codeContent: string):
   const cleanCode = codeContent.replace(/\\/\\*[\\s\\S]*?\\*\\/|\\/\\/.*/g, '');
   const relations: CodeRelation[] = [];
   const seenTargets = new Set<string>();
-
   const importRegex = /import(?:\\s+type)?(?:\\s+[\\s\\S]*?\\s+from)?\\s+['"]([^'"]+)['"]/g;
 
   let match: RegExpExecArray | null;
   while ((match = importRegex.exec(cleanCode)) !== null) {
     const importPath = match[1];
 
-    if (importPath && /^(\\.|\\.\\.|\\@|\\~)\\//.test(importPath)) {
-      if (!seenTargets.has(importPath)) {
-        seenTargets.add(importPath);
-        relations.push({
-          source: sourcePath,
-          target: importPath,
-          type: 'import',
-        });
-      }
+    if (importPath && /^(\\.|\\.\\.|\\@|\\~)\\//.test(importPath) && !seenTargets.has(importPath)) {
+      seenTargets.add(importPath);
+      relations.push({
+        source: sourcePath,
+        target: importPath,
+        type: 'import',
+      });
     }
   }
 
@@ -812,7 +821,25 @@ export function extractImportsFromCode(sourcePath: string, codeContent: string):
 }
 
 /**
- * ดึงข้อมูล Event Triggers (onClick) และ Server Actions (action)
+ * Extract function name identifier from a JavaScript/JSX expression.
+ */
+function extractTargetFunction(expression: string): string | null {
+  const tokens = expression
+    .replace(/['"\`]/g, '')
+    .split(/[^a-zA-Z0-9_$]+/)
+    .filter(Boolean);
+
+  for (const token of tokens) {
+    if (!RESERVED_IDENTIFIERS.has(token) && !/^\\d+$/.test(token)) {
+      return token;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extract onClick event triggers and form server action relations from source code.
  */
 export function extractActionTriggers(sourcePath: string, codeContent: string): CodeRelation[] {
   if (
@@ -827,43 +854,23 @@ export function extractActionTriggers(sourcePath: string, codeContent: string): 
   const relations: CodeRelation[] = [];
   const seenKeys = new Set<string>();
 
-  const RESERVED = new Set([
-    'async', 'await', 'return', 'function', 'true', 'false',
-    'null', 'undefined', 'e', 'event', 'evt', 'formData',
-    'console', 'log', 'preventDefault', 'stopPropagation', 'void'
-  ]);
-
-  const extractTargetFn = (expr: string): string | null => {
-    const tokens = expr
-      .replace(/['"\`]/g, '')
-      .split(/[^a-zA-Z0-9_$]+/)
-      .filter(Boolean);
-
-    for (const token of tokens) {
-      if (!RESERVED.has(token) && !/^\\d+$/.test(token)) {
-        return token;
-      }
-    }
-    return null;
-  };
-
   if (cleanCode.includes('onClick')) {
     const onClickRegex = /onClick=\\{([^}]+)\\}/g;
     let match: RegExpExecArray | null;
 
     while ((match = onClickRegex.exec(cleanCode)) !== null) {
-      const targetFn = extractTargetFn(match[1]);
-      if (targetFn) {
-        const key = \`\${sourcePath}->\${targetFn}:onClick\`;
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          relations.push({
-            source: sourcePath,
-            target: targetFn,
-            type: 'event',
-            label: 'onClick',
-          });
-        }
+      const targetFn = extractTargetFunction(match[1]);
+      if (!targetFn) continue;
+
+      const key = \`\${sourcePath}->\${targetFn}:onClick\`;
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key);
+        relations.push({
+          source: sourcePath,
+          target: targetFn,
+          type: 'event',
+          label: 'onClick',
+        });
       }
     }
   }
@@ -873,18 +880,18 @@ export function extractActionTriggers(sourcePath: string, codeContent: string): 
     let match: RegExpExecArray | null;
 
     while ((match = actionRegex.exec(cleanCode)) !== null) {
-      const targetFn = extractTargetFn(match[1]);
-      if (targetFn) {
-        const key = \`\${sourcePath}->\${targetFn}:form action\`;
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          relations.push({
-            source: sourcePath,
-            target: targetFn,
-            type: 'action',
-            label: 'form action',
-          });
-        }
+      const targetFn = extractTargetFunction(match[1]);
+      if (!targetFn) continue;
+
+      const key = \`\${sourcePath}->\${targetFn}:form action\`;
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key);
+        relations.push({
+          source: sourcePath,
+          target: targetFn,
+          type: 'action',
+          label: 'form action',
+        });
       }
     }
   }
@@ -892,120 +899,46 @@ export function extractActionTriggers(sourcePath: string, codeContent: string): 
   return relations;
 }`;
 
-const RAW_GENERATOR = `// src/lib/generator.ts
-import dagre from '@dagrejs/dagre';
+const RAW_GENERATOR = `import dagre from '@dagrejs/dagre';
 import { CodeRelation, NextFileType, FlowNodeItem, FlowEdgeItem } from '../types';
 
 /**
- * ฟังก์ชันสำหรับแปลงชื่อ path ให้เป็น Node ID ที่ปลอดภัยตามไวยากรณ์ของ Flow และ Mermaid
+ * Sanitize file path into a safe, alphanumeric node identifier for React Flow.
  */
 export function sanitizeNodeId(pathStr: string): string {
   const id = pathStr
-    // 3.1: กำจัดวงเล็บของ Next.js Route Groups เช่น (auth) -> auth
     .replace(/[()]/g, '')
-    // 3.2: แทนที่อักขระพิเศษทุกตัวด้วย underscore
     .replace(/[^a-zA-Z0-9]+/g, '_')
-    // 3.3: ตัด underscore หัวท้าย
     .replace(/^_+|_+$/g, '');
 
   return id || 'node';
 }
 
 const COLOR_PALETTE: Record<string, { border: string; bg: string; text: string }> = {
-  middleware: { border: '#a855f7', bg: '#1e293b', text: '#e9d5ff' },
-  page: { border: '#38bdf8', bg: '#1e293b', text: '#e0f2fe' },
-  action: { border: '#fb923c', bg: '#1e293b', text: '#ffedd5' },
-  store: { border: '#4ade80', bg: '#1e293b', text: '#dcfce7' },
-  component: { border: '#f43f5e', bg: '#1e293b', text: '#ffe4e6' },
-  api: { border: '#facc15', bg: '#1e293b', text: '#fef9c3' },
-  other: { border: '#94a3b8', bg: '#1e293b', text: '#e2e8f0' },
+  middleware: { border: '#a855f7', bg: '#0e1118', text: '#e9d5ff' },
+  page: { border: '#38bdf8', bg: '#0e1118', text: '#e0f2fe' },
+  action: { border: '#fb923c', bg: '#0e1118', text: '#ffedd5' },
+  store: { border: '#4ade80', bg: '#0e1118', text: '#dcfce7' },
+  component: { border: '#f43f5e', bg: '#0e1118', text: '#ffe4e6' },
+  hook: { border: '#818cf8', bg: '#0e1118', text: '#e0e7ff' },
+  api: { border: '#facc15', bg: '#0e1118', text: '#fef9c3' },
+  other: { border: '#94a3b8', bg: '#0e1118', text: '#e2e8f0' },
 };
 
 /**
- * ฟังก์ชันคืนค่าการกำหนดสีตามประเภทไฟล์ของ Next.js
+ * Retrieve border, background, and text colors corresponding to a Next.js file type.
  */
 export function getNodeColorConfig(fileType: NextFileType): { border: string; bg: string; text: string } {
-  // 3.4
   return COLOR_PALETTE[fileType] ?? COLOR_PALETTE.other;
 }
 
-/**
- * ฟังก์ชันกำหนดสีขอบและพื้นหลังสำหรับ Mermaid Syntax (Backward Compatibility)
- */
-export function getNodeStyle(nodeId: string, originalPath: string, fileType: NextFileType = 'other'): string {
-  // 3.5: ถ้า fileType ยังเป็น 'other' ให้เดาจากชื่อ path เพื่อรองรับโค้ดเก่า
-  let type: NextFileType = fileType;
-  if (type === 'other') {
-    const p = originalPath.toLowerCase();
-    if (/(^|\\/)middleware\\.[jt]sx?$/.test(p)) type = 'middleware' as NextFileType;
-    else if (/(^|\\/)page\\.[jt]sx?$/.test(p)) type = 'page' as NextFileType;
-    else if (/(^|\\/)route\\.[jt]s$/.test(p) || p.includes('/api/')) type = 'api' as NextFileType;
-    else if (/action/.test(p)) type = 'action' as NextFileType;
-    else if (/(store|zustand|redux)/.test(p)) type = 'store' as NextFileType;
-    else if (/components?\\//.test(p)) type = 'component' as NextFileType;
-  }
-
-  const { border, bg } = getNodeColorConfig(type);
-  return \`style \${nodeId} fill:\${bg},stroke:\${border},stroke-width:2px\`;
-}
-
-// คอลัมน์ของแต่ละประเภทไฟล์ (ซ้าย -> ขวา ตามลำดับการไหลของข้อมูล)
-const COLUMN_ORDER: string[] = ['middleware', 'page', 'component', 'action', 'api', 'store', 'other'];
+const NODE_WIDTH = 260;
+const NODE_HEIGHT = 80;
 
 /**
- * ฟังก์ชันสร้าง Nodes และ Edges สำหรับ React Flow (@xyflow/react)
- * พร้อมคำนวณพิกัด X, Y ด้วย Hierarchical Graph Layout (Dagre Algorithm)
+ * Compute hierarchical layout coordinates using Dagre graph engine.
  */
-export function buildFlowElements(
-  files: Array<{ path: string; fileType: NextFileType }>,
-  relations: CodeRelation[]
-): { nodes: FlowNodeItem[]; edges: FlowEdgeItem[] } {
-  const typeById = new Map<string, string>();
-  const seenIds = new Set<string>();
-  const nodes: FlowNodeItem[] = [];
-
-  for (const file of files) {
-    const id = sanitizeNodeId(file.path);
-    if (seenIds.has(id)) continue; // กัน id ซ้ำ
-    seenIds.add(id);
-
-    typeById.set(id, file.fileType);
-
-    nodes.push({
-      id,
-      label: file.path,
-      path: file.path,
-      fileType: file.fileType,
-      position: { x: 0, y: 0 },
-    });
-  }
-
-  // 3.7: สร้าง edges พร้อม label และ animated ถ้าปลายทางเป็น action
-  const seenEdges = new Set<string>();
-  const edges: FlowEdgeItem[] = [];
-
-  relations.forEach((rel, i) => {
-    const source = sanitizeNodeId(rel.source);
-    const target = sanitizeNodeId(rel.target);
-    const label = rel.label ?? '';
-    const key = \`\${source}|\${target}|\${label}\`;
-    if (seenEdges.has(key)) return;
-    seenEdges.add(key);
-
-    edges.push({
-      id: \`e_\${source}_\${target}_\${i}\`,
-      source,
-      target,
-      label: label || undefined,
-      animated: typeById.get(target) === 'action' || typeById.get(source) === 'action',
-      style: { stroke: getNodeColorConfig((typeById.get(target) ?? 'other') as NextFileType).border },
-    } as FlowEdgeItem);
-  });
-
-  // 3.8: จัดวางพิกัดด้วย Dagre Hierarchical Layout (เรียงซ้ายไปขวาตาม Rank ความสัมพันธ์ ลดเส้นทับซ้อน)
-  const NODE_WIDTH = 260;
-  const NODE_HEIGHT = 80;
-
+function applyDagreLayout(nodes: FlowNodeItem[], edges: FlowEdgeItem[], seenIds: Set<string>): void {
   try {
     const dagreGraph = new dagre.graphlib.Graph();
     dagreGraph.setDefaultEdgeLabel(() => ({}));
@@ -1032,11 +965,11 @@ export function buildFlowElements(
     dagre.layout(dagreGraph);
 
     for (const node of nodes) {
-      const nodeWithPos = dagreGraph.node(node.id);
-      if (nodeWithPos) {
+      const pos = dagreGraph.node(node.id);
+      if (pos) {
         node.position = {
-          x: Math.round(nodeWithPos.x - NODE_WIDTH / 2),
-          y: Math.round(nodeWithPos.y - NODE_HEIGHT / 2),
+          x: Math.round(pos.x - NODE_WIDTH / 2),
+          y: Math.round(pos.y - NODE_HEIGHT / 2),
         };
       }
     }
@@ -1049,49 +982,115 @@ export function buildFlowElements(
       };
     });
   }
-
-  return { nodes, edges };
 }
 
 /**
- * ฟังก์ชันสร้าง Mermaid Graph Syntax จากรายการความสัมพันธ์ของโค้ด
+ * Transform classified source files and code relations into positioned nodes and edges.
  */
-export function generateMermaidSyntax(relations: CodeRelation[]): string {
-  // 3.8: Empty State
-  if (!relations || relations.length === 0) {
-    return 'graph TD\\n  Empty["No local relations found"]';
+export function buildFlowElements(
+  files: Array<{ path: string; fileType: NextFileType }>,
+  relations: CodeRelation[]
+): { nodes: FlowNodeItem[]; edges: FlowEdgeItem[] } {
+  const typeById = new Map<string, string>();
+  const seenIds = new Set<string>();
+  const idByPath = new Map<string, string>();
+  const nodes: FlowNodeItem[] = [];
+
+  for (const file of files) {
+    let id = sanitizeNodeId(file.path);
+    if (seenIds.has(id)) {
+      let suffix = 2;
+      while (seenIds.has(\`\${id}_\${suffix}\`)) suffix++;
+      id = \`\${id}_\${suffix}\`;
+    }
+    seenIds.add(id);
+    idByPath.set(file.path, id);
+
+    typeById.set(id, file.fileType);
+    nodes.push({
+      id,
+      label: file.path,
+      path: file.path,
+      fileType: file.fileType,
+      position: { x: 0, y: 0 },
+    });
   }
 
-  // 3.9: หัว diagram
-  const lines: string[] = ['graph TD'];
-  const seen = new Set<string>();
+  const seenEdges = new Set<string>();
+  const edges: FlowEdgeItem[] = [];
 
-  const esc = (s: string) => s.replace(/"/g, '#quot;');
+  relations.forEach((rel, i) => {
+    const source = idByPath.get(rel.source) ?? sanitizeNodeId(rel.source);
+    const target = idByPath.get(rel.target) ?? sanitizeNodeId(rel.target);
+    const label = rel.label ?? '';
+    const key = \`\${source}|\${target}|\${label}\`;
+    if (seenEdges.has(key)) return;
+    seenEdges.add(key);
 
-  for (const rel of relations) {
-    const from = sanitizeNodeId(rel.source);
-    const to = sanitizeNodeId(rel.target);
-    const label = rel.label ? esc(rel.label) : '';
+    const isAction = typeById.get(target) === 'action' || typeById.get(source) === 'action';
+    const targetType = (typeById.get(target) ?? 'other') as NextFileType;
 
-    // 3.11: ตัดความสัมพันธ์ซ้ำ
-    const key = \`\${from}|\${to}|\${label}\`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    edges.push({
+      id: \`e_\${source}_\${target}_\${i}\`,
+      source,
+      target,
+      label: label || undefined,
+      animated: isAction,
+      style: { stroke: getNodeColorConfig(targetType).border },
+    } as FlowEdgeItem);
+  });
 
-    // 3.10: เส้นเชื่อมพร้อม label (ถ้ามี)
-    const arrow = label ? \`-->|"\${label}"|\` : '-->';
-    lines.push(\`  \${from}["\${esc(rel.source)}"] \${arrow} \${to}["\${esc(rel.target)}"]\`);
-  }
+  applyDagreLayout(nodes, edges, seenIds);
 
-  return lines.join('\\n');
+  return { nodes, edges };
 }`;
 
-const RAW_PAGE = `'use client';
+const RAW_PAGE = `import React from 'react';
+import { GitFork } from 'lucide-react';
+import { FlowExplorer } from '@/components/FlowExplorer';
 
-import React, { useState, useEffect, useMemo } from 'react';
+export default function HomePage() {
+  return (
+    <main className="min-h-screen bg-[#000000] text-[#ededed] flex flex-col font-sans selection:bg-white/20 selection:text-white bg-grid-pattern relative">
+
+      <header className="border-b border-[#262626] bg-[#000000]/80 backdrop-blur-md sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-6 h-6 rounded bg-[#171717] border border-[#262626] flex items-center justify-center text-white">
+              <GitFork className="w-3.5 h-3.5" />
+            </div>
+            <span className="font-semibold text-xs tracking-wider text-white uppercase font-mono">
+              Git Flowchart
+            </span>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <a
+              href="https://github.com/chsnor/git_flowcahrt"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-zinc-400 hover:text-white transition flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-[#262626] bg-[#0a0a0a] hover:bg-[#171717]"
+            >
+              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path fillRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clipRule="evenodd" />
+              </svg>
+              <span className="font-mono text-[11px]">GitHub</span>
+            </a>
+          </div>
+        </div>
+      </header>
+
+      <FlowExplorer />
+    </main>
+  );
+}`;
+
+const RAW_FLOWEXPLORER = `'use client';
+
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { AnalysisResult, NextFileType, SideDrawerState, FlowNodeItem } from '../types';
-import { FlowCanvas } from '../components/FlowCanvas';
-import { SideDrawer } from '../components/SideDrawer';
+import { FlowCanvas } from './FlowCanvas';
+import { SideDrawer } from './SideDrawer';
 import { 
   validateUrlInput, 
   formatRepoStats, 
@@ -1099,13 +1098,18 @@ import {
   decodeShareableState 
 } from '../lib/ui-helper';
 import { buildGitHubRawUrl, buildGitHubBlobUrl, parseGitHubUrl } from '../lib/github';
+import { Share2, Check, Sparkles, AlertCircle, X } from 'lucide-react';
 
-export default function HomePage() {
-  // =========================================================================
-  // พื้นที่ทำงานของ คนที่ 4: Dashboard & State Orchestrator
-  // =========================================================================
+const SAMPLE_REPOSITORIES = [
+  { label: 'Next.js 101 Course', url: 'https://github.com/chsnor/nextjs101' },
+  { label: 'Next.js Commerce', url: 'https://github.com/vercel/commerce' },
+  { label: 'Next.js Subscription', url: 'https://github.com/vercel/nextjs-subscription-payments' },
+];
 
-  // TODO 4.11: สร้าง State สำหรับจัดการหน้าจอ
+/**
+ * Main application dashboard and state orchestrator for analyzing repositories and visualizing flows.
+ */
+export function FlowExplorer() {
   const [url, setUrl] = useState<string>('');
   const [token, setToken] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
@@ -1113,6 +1117,7 @@ export default function HomePage() {
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [shareCopied, setShareCopied] = useState<boolean>(false);
   const [filterType, setFilterType] = useState<string>('all');
+  const [isCodeLoading, setIsCodeLoading] = useState<boolean>(false);
 
   const [drawerState, setDrawerState] = useState<SideDrawerState>({
     isOpen: false,
@@ -1122,7 +1127,6 @@ export default function HomePage() {
     githubRawUrl: null,
   });
 
-  // TODO 4.13: ฟังก์ชัน handleSelectNode(filePath: string, fileType: NextFileType)
   async function handleSelectNode(
     filePath: string, 
     fileType: NextFileType,
@@ -1130,8 +1134,7 @@ export default function HomePage() {
     overrideRepo?: string,
     overrideBranch?: string
   ) {
-    const targetUrl = url;
-    const parsed = parseGitHubUrl(targetUrl);
+    const parsed = parseGitHubUrl(url);
     const owner = overrideOwner || result?.owner || parsed?.owner || '';
     const repo = overrideRepo || result?.repoName || parsed?.repo || '';
     const branch = overrideBranch || result?.branch || parsed?.branch || 'HEAD';
@@ -1151,15 +1154,13 @@ export default function HomePage() {
       fileContent: null,
       githubRawUrl: blobUrl,
     });
+    setIsCodeLoading(true);
 
     try {
       const headers: Record<string, string> = {};
-      if (token) {
-        headers['Authorization'] = \`Bearer \${token}\`;
-      }
+      if (token?.trim()) headers['Authorization'] = \`Bearer \${token.trim()}\`;
 
       let res = await fetch(rawUrl, { headers });
-      // หาก fetch ด้วย branch ไม่สำเร็จ (เช่น กรณี branch เปลี่ยน) ให้ลองดึงด้วย HEAD
       if (!res.ok && res.status === 404 && branch !== 'HEAD') {
         const headRawUrl = buildGitHubRawUrl(owner, repo, filePath, 'HEAD');
         const headRes = await fetch(headRawUrl, { headers });
@@ -1172,26 +1173,20 @@ export default function HomePage() {
         }
       }
 
-      if (!res.ok) {
-        throw new Error(\`ไม่สามารถดึงไฟล์ได้ (HTTP \${res.status})\`);
-      }
+      if (!res.ok) throw new Error(\`ไม่สามารถดึงไฟล์ได้ (HTTP \${res.status})\`);
       const code = await res.text();
 
-      setDrawerState((prev) => ({
-        ...prev,
-        fileContent: code,
-      }));
+      setDrawerState((prev) => ({ ...prev, fileContent: code }));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการโหลดโค้ด';
-      setDrawerState((prev) => ({
-        ...prev,
-        fileContent: null,
-      }));
+      setDrawerState((prev) => ({ ...prev, fileContent: null }));
       setErrorMessage(msg);
+    } finally {
+      setIsCodeLoading(false);
     }
   }
 
-  // ฟังก์ชันกลางสำหรับการยิง API วิเคราะห์ข้อมูล
+  // เรียก API หลังบ้านเพื่อวิเคราะห์คลังโค้ด
   const executeAnalysis = async (targetUrl: string, githubToken?: string, activeFilePath?: string | null) => {
     const validation = validateUrlInput(targetUrl);
     if (!validation.isValid) {
@@ -1207,18 +1202,23 @@ export default function HomePage() {
       const response = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: cleanUrl, token: githubToken }),
+        body: JSON.stringify({ url: cleanUrl, token: githubToken?.trim() || undefined }),
       });
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || 'ไม่สามารถวิเคราะห์ข้อมูลจาก GitHub ได้');
+        let errText = errorData.error || 'ไม่สามารถวิเคราะห์ข้อมูลจาก GitHub ได้';
+        if (response.status === 401 || errText.includes('401') || errText.includes('Bad credentials')) {
+          errText = errorData.error || '❌ GitHub Token ไม่ถูกต้อง (401 Bad credentials) กรุณาตรวจสอบ Token อีกครั้ง หรือเว้นว่างไว้เพื่อใช้งานแบบสาธารณะ';
+        } else if (response.status === 403 || errText.includes('Rate Limit')) {
+          errText = 'GitHub API ติด Rate Limit (จำกัดการร้องขอต่อชั่วโมง) กรุณารอสักครู่แล้วลองใหม่อีกครั้ง';
+        }
+        throw new Error(errText);
       }
 
       const data: AnalysisResult = await response.json();
       setResult(data);
 
-      // ถ้ามี activeFilePath จากการแชร์ ให้เปิด SideDrawer ดึงโค้ดอัตโนมัติ
       if (activeFilePath) {
         const parsed = parseGitHubUrl(cleanUrl);
         if (parsed) {
@@ -1233,49 +1233,50 @@ export default function HomePage() {
     }
   };
 
-  // โหลด state จาก Query Parameter (?state=...) เมื่อโหลดหน้าเว็บครั้งแรก
+  const executeAnalysisRef = useRef(executeAnalysis);
+  useEffect(() => {
+    executeAnalysisRef.current = executeAnalysis;
+  });
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const stateParam = new URLSearchParams(window.location.search).get('state');
-    if (stateParam) {
-      const decoded = decodeShareableState(stateParam);
-      if (decoded?.url) {
-        setUrl(decoded.url);
-        void executeAnalysis(decoded.url, '', decoded.activeNode);
-      }
+    if (!stateParam) return;
+
+    const decoded = decodeShareableState(stateParam);
+    if (decoded?.url) {
+      const targetUrl = decoded.url;
+      const targetNode = decoded.activeNode;
+      queueMicrotask(() => {
+        setUrl(targetUrl);
+        void executeAnalysisRef.current(targetUrl, token, targetNode);
+      });
     }
   }, []);
 
-  // TODO 4.12: ฟังก์ชัน handleSubmit(e: React.FormEvent)
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     void executeAnalysis(url, token);
   };
 
-  // TODO 4.14: ฟังก์ชัน handleShare()
   const handleShare = () => {
     if (!url || typeof window === 'undefined') return;
     const shareCode = encodeShareableState(
       url,
       drawerState.isOpen ? drawerState.filePath ?? undefined : undefined,
     );
-    
     const shareUrl = \`\${window.location.origin}\${window.location.pathname}?state=\${shareCode}\`;
 
     if (navigator?.clipboard?.writeText) {
       void navigator.clipboard.writeText(shareUrl).then(() => {
         setShareCopied(true);
         setTimeout(() => setShareCopied(false), 3000);
-      }).catch(() => {
-        // Fallback / ignore clipboard failure
       });
     }
   };
 
-  // คำนวณสถิติไฟล์ล่วงหน้าถ้ามีผลลัพธ์
   const stats = result ? formatRepoStats(result.totalFiles, result.filteredFilesCount) : null;
 
-  // คำนวณจำนวนโหนดแยกตามประเภท
   const counts = useMemo(() => {
     if (!result) return {};
     const map: Record<string, number> = { all: result.nodes.length };
@@ -1285,7 +1286,6 @@ export default function HomePage() {
     return map;
   }, [result]);
 
-  // กรองโหนดตามเลเยอร์ที่ผู้ใช้เลือก
   const displayedNodes = useMemo(() => {
     if (!result) return [];
     if (filterType === 'all') return result.nodes;
@@ -1298,7 +1298,6 @@ export default function HomePage() {
     return result.nodes.filter((n) => n.fileType === filterType);
   }, [result, filterType]);
 
-  // กรองเส้นเชื่อมเฉพาะที่ต้นทางและปลายทางยังคงแสดงผลอยู่
   const displayedEdges = useMemo(() => {
     if (!result) return [];
     if (filterType === 'all') return result.edges;
@@ -1307,301 +1306,323 @@ export default function HomePage() {
   }, [result, displayedNodes, filterType]);
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-sky-500/20 selection:text-white">
-      {/* Top Engineering Navbar */}
-      <header className="border-b border-slate-800/80 bg-slate-950/70 backdrop-blur-md sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center text-sky-400">
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="18" cy="18" r="3" />
-                <circle cx="6" cy="6" r="3" />
-                <circle cx="6" cy="18" r="3" />
-                <path d="M18 9a9 9 0 0 1-9 9" />
-                <line x1="6" y1="9" x2="6" y2="15" />
-              </svg>
+    <div className="max-w-7xl w-full mx-auto px-6 py-7 flex-1 flex flex-col gap-5">
+      <section className="bg-[#0a0a0a] border border-[#262626] rounded-lg p-5 shadow-2xl">
+        <form onSubmit={handleSubmit} noValidate className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+            <div className="md:col-span-8 space-y-1.5">
+              <label htmlFor="github-url" className="block text-xs font-mono text-zinc-400 uppercase tracking-wider">
+                GitHub Repository URL <span className="text-rose-400">*</span>
+              </label>
+              <input
+                id="github-url"
+                type="text"
+                placeholder="https://github.com/chsnor/nextjs101"
+                value={url}
+                onChange={(e) => {
+                  setUrl(e.target.value);
+                  if (errorMessage) setErrorMessage(null);
+                }}
+                className={\`w-full px-3.5 py-2.5 bg-[#000000] border rounded text-white font-mono text-xs placeholder:text-zinc-600 focus:outline-none transition \${
+                  errorMessage
+                    ? 'border-rose-500/80 focus:border-rose-400 focus:ring-1 focus:ring-rose-500/30'
+                    : 'border-[#262626] focus:border-white'
+                }\`}
+              />
             </div>
-            <span className="font-semibold text-sm tracking-tight text-white">
-              GitFlow Visualizer
+
+            <div className="md:col-span-4 space-y-1.5">
+              <label htmlFor="github-token" className="block text-xs font-mono text-zinc-400 uppercase tracking-wider flex items-center justify-between">
+                <span>GitHub Token</span>
+                <span className="text-[10px] text-zinc-500 lowercase">optional</span>
+              </label>
+              <input
+                id="github-token"
+                type="password"
+                placeholder="ghp_xxxxxxxxxxxx"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-[#000000] border border-[#262626] rounded text-white font-mono text-xs placeholder:text-zinc-600 focus:outline-none focus:border-white transition"
+              />
+            </div>
+          </div>
+
+          {/* แถบแจ้งเตือนข้อผิดพลาด สไตล์ Dark Minimalist & Precision Box */}
+          {errorMessage && (
+            <div className="flex items-start gap-2.5 px-3.5 py-2.5 rounded border border-rose-500/30 bg-rose-950/20 text-rose-300 text-xs font-mono animate-in fade-in slide-in-from-top-1 duration-200">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <div className="flex-1 leading-relaxed text-[11px] sm:text-xs">
+                {errorMessage}
+              </div>
+              <button 
+                type="button" 
+                onClick={() => setErrorMessage(null)} 
+                className="text-zinc-500 hover:text-zinc-300 p-0.5 transition cursor-pointer shrink-0"
+                aria-label="ปิดการแจ้งเตือน"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* Quick Sample Chips (สไตล์ Vercel Monochrome Chips) */}
+          <div className="flex flex-wrap items-center gap-2 pt-0.5">
+            <span className="text-[11px] font-mono text-zinc-500 flex items-center gap-1">
+              <Sparkles className="w-3 h-3 text-zinc-400" />
+              <span>ตัวอย่าง:</span>
             </span>
+            {SAMPLE_REPOSITORIES.map((repo) => (
+              <button
+                key={repo.url}
+                type="button"
+                onClick={() => {
+                  setUrl(repo.url);
+                  setErrorMessage(null);
+                  void executeAnalysis(repo.url, token);
+                }}
+                className="px-2.5 py-1 rounded text-[11px] font-mono bg-[#171717] hover:bg-[#262626] text-zinc-300 hover:text-white border border-[#262626] transition cursor-pointer"
+              >
+                {repo.label}
+              </button>
+            ))}
           </div>
 
-          <div className="flex items-center gap-3">
-            <a
-              href="https://github.com/chsnor/git_flowcahrt"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-slate-400 hover:text-white transition flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-800 bg-slate-900/60 hover:bg-slate-800"
+          <div className="flex items-center justify-between pt-1">
+            <span className="text-[11px] text-zinc-500">
+              รองรับ App Router, Server Actions, Client Components และ Stores
+            </span>
+            <button
+              type="submit"
+              disabled={loading}
+              className="px-6 py-2 bg-white hover:bg-zinc-200 disabled:bg-[#262626] disabled:text-zinc-600 text-black font-semibold text-xs rounded transition flex items-center justify-center gap-2 cursor-pointer shadow-md"
             >
-              <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
-                <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
-              </svg>
-              <span>GitHub</span>
-            </a>
+              {loading ? (
+                <>
+                  <svg className="animate-spin h-3.5 w-3.5 text-black" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                  </svg>
+                  <span>กำลังวิเคราะห์...</span>
+                </>
+              ) : (
+                <span>วิเคราะห์สถาปัตยกรรม →</span>
+              )}
+            </button>
           </div>
-        </div>
-      </header>
+        </form>
+      </section>
 
-      {/* Main Content Area */}
-      <div className="max-w-7xl w-full mx-auto px-6 py-8 flex-1 flex flex-col gap-6">
-        
-        {/* Repository Input Section */}
-        <section className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 shadow-sm">
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-              <div className="md:col-span-8 space-y-1.5">
-                <label htmlFor="github-url" className="block text-xs font-medium text-slate-300">
-                  GitHub Repository URL <span className="text-rose-400">*</span>
-                </label>
-                <input
-                  id="github-url"
-                  type="text"
-                  placeholder="https://github.com/chsnor/nextjs101"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-lg text-white font-mono text-xs placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500/60 transition"
-                  required
-                />
-              </div>
-
-              <div className="md:col-span-4 space-y-1.5">
-                <label htmlFor="github-token" className="block text-xs font-medium text-slate-400 flex items-center justify-between">
-                  <span>GitHub Token</span>
-                  <span className="text-[10px] text-slate-500 font-normal">ทางเลือก (Private/Rate Limit)</span>
-                </label>
-                <input
-                  id="github-token"
-                  type="password"
-                  placeholder="ghp_xxxxxxxxxxxx"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-lg text-white font-mono text-xs placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500/60 transition"
-                />
-              </div>
+      {/* ส่วนแสดงผลสถิติและแผนผัง */}
+      {result && (
+        <section className="space-y-4 flex-1 flex flex-col">
+          {/* แถบสถานะทางวิศวกรรม */}
+          <div className="bg-[#0a0a0a] border border-[#262626] rounded-lg px-5 py-3.5 flex flex-wrap items-center justify-between gap-4 shadow-xl">
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-semibold text-white tracking-tight flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                {result.owner}/{result.repoName}
+              </span>
+              <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-[#171717] text-zinc-300 border border-[#262626]">
+                {result.branch || 'default'}
+              </span>
             </div>
 
-            {errorMessage && (
-              <div className="bg-rose-500/10 border border-rose-500/30 text-rose-300 px-4 py-3 rounded-lg text-xs flex items-center justify-between">
-                <span>{errorMessage}</span>
-                <button 
-                  type="button" 
-                  onClick={() => setErrorMessage(null)} 
-                  className="text-rose-400 hover:text-white text-xs ml-4"
-                >
-                  ✕
-                </button>
+            {stats && (
+              <div className="flex items-center gap-4 text-xs font-mono">
+                <div className="flex items-center gap-1.5 text-zinc-400">
+                  <span>วิเคราะห์ได้:</span>
+                  <span className="text-white font-medium">
+                    <span className="font-semibold">{stats.analyzedCount}</span> ไฟล์
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 text-zinc-400">
+                  <span>คัดกรองออก:</span>
+                  <span className="text-zinc-500 font-medium">
+                    <span>{stats.ignoredCount}</span> ({stats.rawCount > 0 ? Math.round((stats.ignoredCount / stats.rawCount) * 100) : 0}%)
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 text-zinc-400">
+                  <span>เส้นเชื่อม:</span>
+                  <span className="text-zinc-300 font-medium">{result.relations.length}</span>
+                </div>
+                {result.executionTimeMs !== undefined && (
+                  <div className="hidden lg:flex items-center gap-1 text-[11px] text-zinc-500">
+                    <span>(<span>{Math.round(result.executionTimeMs)}</span>ms)</span>
+                  </div>
+                )}
               </div>
             )}
 
-            <div className="flex items-center justify-between pt-1">
-              <span className="text-[11px] text-slate-500">
-                รองรับ App Router, Server Actions, Client Components และ Stores
-              </span>
+            <div className="flex items-center gap-2">
               <button
-                type="submit"
-                disabled={loading}
-                className="px-5 py-2.5 bg-white hover:bg-slate-200 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 font-medium text-xs rounded-lg transition flex items-center justify-center gap-2 cursor-pointer shadow-sm"
+                type="button"
+                onClick={handleShare}
+                className="px-3.5 py-1.5 bg-[#171717] hover:bg-[#262626] text-zinc-200 text-xs font-medium rounded border border-[#262626] transition flex items-center gap-1.5 cursor-pointer font-mono"
               >
-                {loading ? (
-                  <>
-                    <svg className="animate-spin h-3.5 w-3.5 text-slate-950" viewBox="0 0 24 24" fill="none">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                    </svg>
-                    <span>กำลังวิเคราะห์สถาปัตยกรรม...</span>
-                  </>
+                {shareCopied ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
                 ) : (
-                  <span>เริ่มวิเคราะห์สถาปัตยกรรม</span>
+                  <Share2 className="w-3.5 h-3.5 text-zinc-400" />
                 )}
+                <span>{shareCopied ? 'Copied' : 'Share'}</span>
               </button>
             </div>
-          </form>
-        </section>
+          </div>
 
-        {/* Dashboard Status & Flowchart */}
-        {result && (
-          <section className="space-y-4 flex-1 flex flex-col">
-            {/* Engineering Status Bar */}
-            <div className="bg-slate-900/60 border border-slate-800 rounded-xl px-5 py-3.5 flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <span className="text-xs font-semibold text-white tracking-tight flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                  {result.owner}/{result.repoName}
-                </span>
-                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700/60">
-                  {result.branch || 'default'}
-                </span>
-              </div>
+          {/* แถบกรองสถาปัตยกรรม สไตล์ Vercel Monochrome Tabs */}
+          <div className="flex items-center gap-1.5 text-xs text-zinc-400 px-1 overflow-x-auto pb-1 font-mono">
+            <span className="font-medium text-zinc-500 mr-1 hidden sm:inline text-[11px]">FILTER:</span>
+            
+            <button
+              type="button"
+              onClick={() => setFilterType('all')}
+              className={\`px-3 py-1.5 rounded border text-xs font-medium transition cursor-pointer flex items-center gap-2 \${
+                filterType === 'all'
+                  ? 'bg-white border-white text-black font-semibold'
+                  : 'bg-[#0a0a0a] border-[#262626] text-zinc-400 hover:text-white hover:bg-[#171717]'
+              }\`}
+            >
+              <span>ALL</span>
+              <span className={\`text-[10px] px-1.5 py-0.2 rounded border \${
+                filterType === 'all' ? 'bg-zinc-200 text-black border-zinc-300' : 'bg-[#171717] text-zinc-400 border-[#262626]'
+              }\`}>
+                {counts.all ?? 0}
+              </span>
+            </button>
 
-              {stats && (
-                <div className="flex items-center gap-4 text-xs">
-                  <div className="flex items-center gap-1.5 text-slate-400">
-                    <span>วิเคราะห์ได้:</span>
-                    <span className="text-sky-400 font-medium">
-                      <span className="font-mono font-semibold">{stats.analyzedCount}</span> ไฟล์
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5 text-slate-400">
-                    <span>คัดกรองออก:</span>
-                    <span className="text-slate-400 font-medium">
-                      <span className="font-mono text-slate-500">{stats.ignoredCount}</span> ({stats.rawCount > 0 ? Math.round((stats.ignoredCount / stats.rawCount) * 100) : 0}%)
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5 text-slate-400">
-                    <span>เส้นเชื่อม:</span>
-                    <span className="font-mono text-slate-300 font-medium">{result.relations.length}</span>
-                  </div>
-                  {result.executionTimeMs !== undefined && (
-                    <div className="hidden lg:flex items-center gap-1 text-[11px] text-slate-500">
-                      <span>(<span className="font-mono">{Math.round(result.executionTimeMs)}</span>ms)</span>
-                    </div>
-                  )}
-                </div>
+            <button
+              type="button"
+              onClick={() => setFilterType((prev) => (prev === 'page' ? 'all' : 'page'))}
+              className={\`px-3 py-1.5 rounded border text-xs font-medium transition cursor-pointer flex items-center gap-2 \${
+                filterType === 'page'
+                  ? 'bg-white border-white text-black font-semibold'
+                  : 'bg-[#0a0a0a] border-[#262626] text-zinc-400 hover:text-white hover:bg-[#171717]'
+              }\`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-[#38bdf8]" />
+              <span>PAGE</span>
+              {((counts.page ?? 0) + (counts.middleware ?? 0)) > 0 && (
+                <span className={\`text-[10px] px-1.5 py-0.2 rounded border \${
+                  filterType === 'page' ? 'bg-zinc-200 text-black border-zinc-300' : 'bg-[#171717] text-zinc-400 border-[#262626]'
+                }\`}>
+                  {(counts.page ?? 0) + (counts.middleware ?? 0)}
+                </span>
               )}
+            </button>
 
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleShare}
-                  className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-medium rounded-lg border border-slate-700 transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  <svg className="w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
-                    <polyline points="16 6 12 2 8 6" />
-                    <line x1="12" y1="2" x2="12" y2="15" />
-                  </svg>
-                  <span>{shareCopied ? 'คัดลอกเรียบร้อย!' : 'คัดลอก Share Link'}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Architecture Legend & Interactive Layer Filter Strip */}
-            <div className="flex items-center gap-2 text-xs text-slate-400 px-1 overflow-x-auto pb-1">
-              <span className="font-medium text-slate-500 mr-1 hidden sm:inline text-[11px]">กรองสถาปัตยกรรม:</span>
-              
-              <button
-                type="button"
-                onClick={() => setFilterType('all')}
-                className={\`px-3 py-1.5 rounded-lg border text-xs font-medium transition cursor-pointer flex items-center gap-2 \${
-                  filterType === 'all'
-                    ? 'bg-slate-800 border-slate-600 text-white shadow-sm'
-                    : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                }\`}
-              >
-                <span>ทั้งหมด</span>
-                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-950 text-slate-400 border border-slate-800">
-                  {counts.all ?? 0}
+            <button
+              type="button"
+              onClick={() => setFilterType((prev) => (prev === 'component' ? 'all' : 'component'))}
+              className={\`px-3 py-1.5 rounded border text-xs font-medium transition cursor-pointer flex items-center gap-2 \${
+                filterType === 'component'
+                  ? 'bg-white border-white text-black font-semibold'
+                  : 'bg-[#0a0a0a] border-[#262626] text-zinc-400 hover:text-white hover:bg-[#171717]'
+              }\`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-[#f43f5e]" />
+              <span>COMPONENT</span>
+              {(counts.component ?? 0) > 0 && (
+                <span className={\`text-[10px] px-1.5 py-0.2 rounded border \${
+                  filterType === 'component' ? 'bg-zinc-200 text-black border-zinc-300' : 'bg-[#171717] text-zinc-400 border-[#262626]'
+                }\`}>
+                  {counts.component ?? 0}
                 </span>
-              </button>
+              )}
+            </button>
 
-              <button
-                type="button"
-                onClick={() => setFilterType((prev) => (prev === 'page' ? 'all' : 'page'))}
-                className={\`px-3 py-1.5 rounded-lg border text-xs font-medium transition cursor-pointer flex items-center gap-2 \${
-                  filterType === 'page'
-                    ? 'bg-sky-500/15 border-sky-500/50 text-sky-300 shadow-sm'
-                    : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                }\`}
-              >
-                <span className="w-2 h-2 rounded-full bg-[#38bdf8]" />
-                <span>Page / Route</span>
-                {((counts.page ?? 0) + (counts.middleware ?? 0)) > 0 && (
-                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-950 text-slate-400 border border-slate-800">
-                    {(counts.page ?? 0) + (counts.middleware ?? 0)}
-                  </span>
-                )}
-              </button>
+            <button
+              type="button"
+              onClick={() => setFilterType((prev) => (prev === 'action' ? 'all' : 'action'))}
+              className={\`px-3 py-1.5 rounded border text-xs font-medium transition cursor-pointer flex items-center gap-2 \${
+                filterType === 'action'
+                  ? 'bg-white border-white text-black font-semibold'
+                  : 'bg-[#0a0a0a] border-[#262626] text-zinc-400 hover:text-white hover:bg-[#171717]'
+              }\`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-[#fb923c]" />
+              <span>ACTION</span>
+              {((counts.action ?? 0) + (counts.api ?? 0)) > 0 && (
+                <span className={\`text-[10px] px-1.5 py-0.2 rounded border \${
+                  filterType === 'action' ? 'bg-zinc-200 text-black border-zinc-300' : 'bg-[#171717] text-zinc-400 border-[#262626]'
+                }\`}>
+                  {(counts.action ?? 0) + (counts.api ?? 0)}
+                </span>
+              )}
+            </button>
 
-              <button
-                type="button"
-                onClick={() => setFilterType((prev) => (prev === 'component' ? 'all' : 'component'))}
-                className={\`px-3 py-1.5 rounded-lg border text-xs font-medium transition cursor-pointer flex items-center gap-2 \${
-                  filterType === 'component'
-                    ? 'bg-rose-500/15 border-rose-500/50 text-rose-300 shadow-sm'
-                    : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                }\`}
-              >
-                <span className="w-2 h-2 rounded-full bg-[#f43f5e]" />
-                <span>Component</span>
-                {(counts.component ?? 0) > 0 && (
-                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-950 text-slate-400 border border-slate-800">
-                    {counts.component ?? 0}
-                  </span>
-                )}
-              </button>
+            <button
+              type="button"
+              onClick={() => setFilterType((prev) => (prev === 'store' ? 'all' : 'store'))}
+              className={\`px-3 py-1.5 rounded border text-xs font-medium transition cursor-pointer flex items-center gap-2 \${
+                filterType === 'store'
+                  ? 'bg-white border-white text-black font-semibold'
+                  : 'bg-[#0a0a0a] border-[#262626] text-zinc-400 hover:text-white hover:bg-[#171717]'
+              }\`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-[#4ade80]" />
+              <span>STORE</span>
+              {(counts.store ?? 0) > 0 && (
+                <span className={\`text-[10px] px-1.5 py-0.2 rounded border \${
+                  filterType === 'store' ? 'bg-zinc-200 text-black border-zinc-300' : 'bg-[#171717] text-zinc-400 border-[#262626]'
+                }\`}>
+                  {counts.store ?? 0}
+                </span>
+              )}
+            </button>
 
-              <button
-                type="button"
-                onClick={() => setFilterType((prev) => (prev === 'action' ? 'all' : 'action'))}
-                className={\`px-3 py-1.5 rounded-lg border text-xs font-medium transition cursor-pointer flex items-center gap-2 \${
-                  filterType === 'action'
-                    ? 'bg-orange-500/15 border-orange-500/50 text-orange-300 shadow-sm'
-                    : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                }\`}
-              >
-                <span className="w-2 h-2 rounded-full bg-[#fb923c]" />
-                <span>Server Action</span>
-                {((counts.action ?? 0) + (counts.api ?? 0)) > 0 && (
-                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-950 text-slate-400 border border-slate-800">
-                    {(counts.action ?? 0) + (counts.api ?? 0)}
-                  </span>
-                )}
-              </button>
+            <button
+              type="button"
+              onClick={() => setFilterType((prev) => (prev === 'hook' ? 'all' : 'hook'))}
+              className={\`px-3 py-1.5 rounded border text-xs font-medium transition cursor-pointer flex items-center gap-2 \${
+                filterType === 'hook'
+                  ? 'bg-white border-white text-black font-semibold'
+                  : 'bg-[#0a0a0a] border-[#262626] text-zinc-400 hover:text-white hover:bg-[#171717]'
+              }\`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-[#818cf8]" />
+              <span>HOOK</span>
+              {(counts.hook ?? 0) > 0 && (
+                <span className={\`text-[10px] px-1.5 py-0.2 rounded border \${
+                  filterType === 'hook' ? 'bg-zinc-200 text-black border-zinc-300' : 'bg-[#171717] text-zinc-400 border-[#262626]'
+                }\`}>
+                  {counts.hook ?? 0}
+                </span>
+              )}
+            </button>
+          </div>
 
-              <button
-                type="button"
-                onClick={() => setFilterType((prev) => (prev === 'store' ? 'all' : 'store'))}
-                className={\`px-3 py-1.5 rounded-lg border text-xs font-medium transition cursor-pointer flex items-center gap-2 \${
-                  filterType === 'store'
-                    ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-300 shadow-sm'
-                    : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                }\`}
-              >
-                <span className="w-2 h-2 rounded-full bg-[#4ade80]" />
-                <span>Store / State</span>
-                {(counts.store ?? 0) > 0 && (
-                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-950 text-slate-400 border border-slate-800">
-                    {counts.store ?? 0}
-                  </span>
-                )}
-              </button>
-            </div>
+          {/* แคนวาสแผนผัง React Flow */}
+          <div className="bg-[#000000] border border-[#262626] rounded-lg overflow-hidden h-[620px] relative shadow-2xl">
+            <FlowCanvas
+              nodes={displayedNodes}
+              edges={displayedEdges}
+              onSelectNode={(filePath, fileType) => {
+                void handleSelectNode(filePath, fileType);
+              }}
+            />
+          </div>
+        </section>
+      )}
 
-            {/* Interactive Flow Canvas */}
-            <div className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden h-[620px] relative shadow-lg">
-              <FlowCanvas
-                nodes={displayedNodes}
-                edges={displayedEdges}
-                onSelectNode={(filePath, fileType) => {
-                  void handleSelectNode(filePath, fileType);
-                }}
-              />
-            </div>
-          </section>
-        )}
-
-        {/* Side Inspector Drawer (TODO 4.16) */}
-        <SideDrawer
-          isOpen={drawerState.isOpen}
-          onClose={() => setDrawerState((prev) => ({ ...prev, isOpen: false }))}
-          filePath={drawerState.filePath ?? ''}
-          fileType={drawerState.fileType ?? 'other'}
-          rawCode={drawerState.fileContent ?? ''}
-          githubRawUrl={drawerState.githubRawUrl ?? ''}
-        />
-
-      </div>
-    </main>
+      {/* แถบเลื่อนส่องโค้ด Side Drawer */}
+      <SideDrawer
+        isOpen={drawerState.isOpen}
+        onClose={() => setDrawerState((prev) => ({ ...prev, isOpen: false }))}
+        filePath={drawerState.filePath ?? ''}
+        fileType={drawerState.fileType ?? 'other'}
+        rawCode={drawerState.fileContent ?? ''}
+        githubRawUrl={drawerState.githubRawUrl ?? ''}
+        isLoading={isCodeLoading}
+      />
+    </div>
   );
-}`;
+}
+`;
 
-const RAW_UIHELPER = `// src/lib/ui-helper.ts
-
-/**
- * ฟังก์ชันช่วยตรวจสอบความถูกต้องและความปลอดภัยของ URL ก่อนส่งคำขอ
+const RAW_UIHELPER = `/**
+ * Validate GitHub URL structure, domain integrity, and prevent malicious scripts.
  */
 export function validateUrlInput(input: string): { isValid: boolean; errorMessage: string | null } {
-  // TODO 4.1: ตรวจสอบความยาวและค่าว่าง (Empty & Whitespace Check)
   if (!input || !input.trim()) {
     return { isValid: false, errorMessage: 'กรุณากรอก GitHub URL' };
   }
@@ -1609,8 +1630,14 @@ export function validateUrlInput(input: string): { isValid: boolean; errorMessag
   const trimmed = input.trim();
   const lowerInput = trimmed.toLowerCase();
 
-  // TODO 4.2: ตรวจสอบความปลอดภัยเบื้องต้น (XSS / Suspicious Input Guard)
-  // ตรวจสอบแบบ string search และการเช็คแท็กพื้นฐานอย่างปลอดภัย
+  let hostname = '';
+  try {
+    const candidate = /^https?:\\/\\//i.test(trimmed) ? trimmed : \`https://\${trimmed}\`;
+    hostname = new URL(candidate).hostname.toLowerCase();
+  } catch {
+    hostname = '';
+  }
+
   const containsXss = lowerInput.includes('<script') || 
                       lowerInput.includes('javascript:') || 
                       (lowerInput.includes('<') && lowerInput.includes('>'));
@@ -1619,89 +1646,40 @@ export function validateUrlInput(input: string): { isValid: boolean; errorMessag
     return { isValid: false, errorMessage: 'URL ต้องมาจาก github.com เท่านั้น' };
   }
 
-  // TODO 4.3: ตรวจสอบโดเมน (Domain Verification) - ต้องมี github.com
-  if (!trimmed.includes('github.com')) {
+  if (hostname !== 'github.com' && hostname !== 'www.github.com') {
     return { isValid: false, errorMessage: 'URL ต้องมาจาก github.com เท่านั้น' };
   }
 
-  // TODO 4.4: เมื่อผ่านการตรวจสอบทั้งหมด ให้ส่ง isValid: true
+  const urlWithoutDomain = trimmed.replace(/^https?:\\/\\/(www\\.)?github\\.com\\/?/i, '').replace(/\\.git$/i, '').replace(/\\/+$/, '');
+  const segments = urlWithoutDomain.split('/').filter(Boolean);
+  if (segments.length < 2) {
+    return { isValid: false, errorMessage: 'URL ต้องระบุทั้งชื่อเจ้าของและคลังโค้ด (เช่น https://github.com/owner/repo)' };
+  }
+
   return { isValid: true, errorMessage: null };
 }
 
 /**
- * ฟังก์ชันคำนวณและจัดรูปแบบตัวเลขสถิติสำหรับนำไปแสดงบนหน้าจอ Dashboard
+ * Format repository metrics for total, analyzed, and ignored files.
  */
 export function formatRepoStats(totalFiles: number, filteredFiles: number): {
   rawCount: number;
   analyzedCount: number;
   ignoredCount: number;
-  summaryText: string;
 } {
-  // TODO 4.5: ป้องกันข้อผิดพลาดทางตัวเลข (Math Safety)
   const rawCount = Math.max(0, Number.isFinite(totalFiles) ? totalFiles : 0);
   const analyzedCount = Math.max(0, Number.isFinite(filteredFiles) ? filteredFiles : 0);
   const ignoredCount = Math.max(0, rawCount - analyzedCount);
 
-  // TODO 4.6: สร้างข้อความสรุปผล (Summary Text Construction)
-  const dropPercentage = rawCount > 0 ? Math.round((ignoredCount / rawCount) * 100) : 0;
-  const summaryText = \`วิเคราะห์โค้ดทั้งหมด \${analyzedCount} ไฟล์ จากทั้งหมด \${rawCount} ไฟล์ (ละเว้น \${ignoredCount} ไฟล์ คิดเป็น \${dropPercentage}%)\`;
-
-  // TODO 4.7: ส่งคืนค่าในรูปแบบ Object
   return {
     rawCount,
     analyzedCount,
     ignoredCount,
-    summaryText,
   };
 }
 
 /**
- * ฟังก์ชันคำนวณคะแนนสุขภาพสถาปัตยกรรม (Architecture Health Score)
- */
-export function calculateHealthScore(totalRelations: number, filteredFiles: number): {
-  grade: 'A' | 'B' | 'C' | 'N/A';
-  ratio: number;
-  description: string;
-} {
-  if (!filteredFiles || filteredFiles <= 0) {
-    return {
-      grade: 'N/A',
-      ratio: 0,
-      description: 'ไม่พบไฟล์ที่วิเคราะห์ได้ หรือไม่มีข้อมูลไฟล์',
-    };
-  }
-
-  const validRelations = Math.max(0, Number.isFinite(totalRelations) ? totalRelations : 0);
-  const computedRatio = validRelations / filteredFiles;
-  const ratio = Math.round(computedRatio * 100) / 100;
-
-  if (ratio >= 0.8 && ratio <= 2.5) {
-    return {
-      grade: 'A',
-      ratio,
-      description: 'โครงสร้างแยกส่วนกำลังพอดี ไม่ซับซ้อนเกินไป (Balanced Coupling)',
-    };
-  }
-
-  if (ratio > 2.5 && ratio <= 4.0) {
-    return {
-      grade: 'B',
-      ratio,
-      description: 'เริ่มมีความผูกพันกันค่อนข้างแน่น (High Coupling)',
-    };
-  }
-
-  return {
-    grade: 'C',
-    ratio,
-    description: ratio < 0.8 
-      ? 'แทบไม่มีการแยกส่วนคอมโพเนนต์ หรือการเชื่อมโยงต่ำเกินไป' 
-      : 'โค้ดผูกติดกันแน่นเกินไป แก้ไขหรือดูแลรักษาได้ยาก (Tight Coupling)',
-  };
-}
-
-/**
- * ฟังก์ชันเข้ารหัส State ของหน้าจอเพื่อสร้าง URL ที่สามารถแชร์ได้
+ * Encode current explorer state into a base64 string for shareable URLs.
  */
 export function encodeShareableState(url: string, activeNode?: string): string {
   if (!url) return '';
@@ -1725,7 +1703,7 @@ export function encodeShareableState(url: string, activeNode?: string): string {
 }
 
 /**
- * ฟังก์ชันถอดรหัส State จาก URL query string
+ * Decode shared state from a base64 string payload.
  */
 export function decodeShareableState(encodedStr: string): { url: string; activeNode?: string } | null {
   if (!encodedStr || typeof encodedStr !== 'string') return null;
@@ -1745,7 +1723,7 @@ export function decodeShareableState(encodedStr: string): { url: string; activeN
     try {
       jsonString = decodeURIComponent(rawDecoded);
     } catch {
-      // If rawDecoded is already valid JSON without percent-encoding, keep it
+      // Use rawDecoded directly if not percent-encoded
     }
 
     const parsed = JSON.parse(jsonString);
@@ -1771,8 +1749,22 @@ import 'prismjs/components/prism-css';
 import 'prismjs/components/prism-clike';
 import 'prismjs/components/prism-markup';
 
+const EXTENSION_LANGUAGE_MAP: Record<string, string> = {
+  ts: 'typescript',
+  tsx: 'tsx',
+  js: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
+  jsx: 'jsx',
+  json: 'json',
+  css: 'css',
+  html: 'markup',
+  xml: 'markup',
+  svg: 'markup',
+};
+
 /**
- * 1. ตรวจสอบภาษาจากนามสกุลไฟล์
+ * Resolve language identifier for Prism syntax highlighter from file extension.
  */
 export function getLanguageFromPath(filePath: string): string {
   if (!filePath || typeof filePath !== 'string') return 'clike';
@@ -1780,35 +1772,12 @@ export function getLanguageFromPath(filePath: string): string {
   const cleanPath = filePath.split('?')[0].split('#')[0];
   const lastDot = cleanPath.lastIndexOf('.');
 
-  // ถ้าไม่มีจุด หรือไม่มีนามสกุลไฟล์ (เช่น Dockerfile)
   if (lastDot === -1 || lastDot === cleanPath.length - 1) {
     return 'clike';
   }
 
   const extension = cleanPath.slice(lastDot + 1).toLowerCase();
-
-  switch (extension) {
-    case 'ts':
-      return 'typescript';
-    case 'tsx':
-      return 'tsx';
-    case 'js':
-    case 'mjs':
-    case 'cjs':
-      return 'javascript';
-    case 'jsx':
-      return 'jsx';
-    case 'json':
-      return 'json';
-    case 'css':
-      return 'css';
-    case 'html':
-    case 'xml':
-    case 'svg':
-      return 'markup';
-    default:
-      return 'clike';
-  }
+  return EXTENSION_LANGUAGE_MAP[extension] ?? 'clike';
 }
 
 export interface FormattedCodeResult {
@@ -1820,7 +1789,7 @@ export interface FormattedCodeResult {
 }
 
 /**
- * 2. ตัดทอนและนับบรรทัดของโค้ด
+ * Limit and format raw source code lines to prevent DOM performance degradation.
  */
 export function formatCodeSnippet(rawCode: string, maxLines: number = 300): FormattedCodeResult {
   if (typeof rawCode !== 'string') {
@@ -1835,58 +1804,53 @@ export function formatCodeSnippet(rawCode: string, maxLines: number = 300): Form
 
   const lines = rawCode.split('\\n');
   const totalLines = lines.length;
-
-  if (totalLines > maxLines) {
-    const truncatedCode = lines.slice(0, maxLines).join('\\n');
-    return {
-      snippet: truncatedCode,
-      code: truncatedCode,
-      totalLines,
-      isTruncated: true,
-      displayedLines: maxLines,
-    };
-  }
+  const isTruncated = totalLines > maxLines;
+  const code = isTruncated ? lines.slice(0, maxLines).join('\\n') : rawCode;
 
   return {
-    snippet: rawCode,
-    code: rawCode,
+    snippet: code,
+    code,
     totalLines,
-    isTruncated: false,
-    displayedLines: totalLines,
+    isTruncated,
+    displayedLines: isTruncated ? maxLines : totalLines,
   };
 }
 
 /**
- * 3. ทำ Syntax Highlighting ปลอดภัยต่อการเรนเดอร์
+ * Escape special HTML entities to prevent XSS in rendered code blocks.
+ */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/**
+ * Highlight source code syntax safely using Prism with HTML entity fallback.
  */
 export function highlightCodeWithPrism(code: string, language: string): string {
   if (!code) return '';
 
   const grammar = Prism.languages[language];
-
   if (!grammar) {
-    // Escape HTML กรณีไม่รู้จักภาษา เพื่อความปลอดภัยและไม่ crash
-    return code
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+    return escapeHtml(code);
   }
 
   try {
     return Prism.highlight(code, grammar, language);
   } catch {
-    return code
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+    return escapeHtml(code);
   }
 }`;
 
 const RAW_FLOWCANVAS = `'use client';
 
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
   ReactFlow,
+  ReactFlowProvider,
+  useReactFlow,
   MiniMap,
   Controls,
   Background,
@@ -1902,6 +1866,7 @@ import '@xyflow/react/dist/style.css';
 
 import { FlowNodeItem, FlowEdgeItem, NextFileType } from '../types';
 import { getNodeColorConfig } from '../lib/generator';
+import { Search, Code2, X, SlidersHorizontal, Map as MapIcon, Layers } from 'lucide-react';
 
 export interface FlowCanvasProps {
   nodes: FlowNodeItem[];
@@ -1924,7 +1889,7 @@ const COL_WIDTH = 320;
 const ROW_HEIGHT = 120;
 
 /**
- * คำนวณโหนดและเส้นเชื่อมทั้งหมดในสายการไหล (Transitive Flow Path / Upstream & Downstream Traverse)
+ * Compute upstream and downstream connected nodes and edges for highlighted flow tracing.
  */
 function computeTracePath(
   selectedNodeId: string | null,
@@ -1938,7 +1903,6 @@ function computeTracePath(
   const connectedNodeIds = new Set<string>();
   const connectedEdgeIds = new Set<string>();
 
-  // กรณี 1-Step (เฉพาะโหนดที่แตะกันตรงๆ)
   if (traceMode === 'direct') {
     for (const edge of edges) {
       if (edge.source === selectedNodeId) {
@@ -1953,39 +1917,44 @@ function computeTracePath(
     return { connectedNodeIds, connectedEdgeIds };
   }
 
-  // กรณี Full Chain (สืบย้อนสายต้นทาง Upstream และสืบต่อไปปลายทาง Downstream ครบทั้งวงรอบ)
-  // 1. Upstream (Ancestors: ใครเรียกหรือส่งต่อข้อมูลมาหาโหนดนี้บ้าง)
-  const upQueue: string[] = [selectedNodeId];
-  const visitedUp = new Set<string>([selectedNodeId]);
+  // กรณี Full Trace (สืบย้อนทั้ง Ancestors และ Descendants)
+  const incomingMap = new Map<string, Array<{ source: string; edgeId: string }>>();
+  const outgoingMap = new Map<string, Array<{ target: string; edgeId: string }>>();
 
-  while (upQueue.length > 0) {
-    const curr = upQueue.shift()!;
-    for (const edge of edges) {
-      if (edge.target === curr) {
-        connectedEdgeIds.add(edge.id);
-        if (!visitedUp.has(edge.source)) {
-          visitedUp.add(edge.source);
-          connectedNodeIds.add(edge.source);
-          upQueue.push(edge.source);
-        }
+  for (const edge of edges) {
+    if (!outgoingMap.has(edge.source)) outgoingMap.set(edge.source, []);
+    outgoingMap.get(edge.source)!.push({ target: edge.target, edgeId: edge.id });
+
+    if (!incomingMap.has(edge.target)) incomingMap.set(edge.target, []);
+    incomingMap.get(edge.target)!.push({ source: edge.source, edgeId: edge.id });
+  }
+
+  const visitedDescendants = new Set<string>();
+  const queueDesc = [selectedNodeId];
+  while (queueDesc.length > 0) {
+    const curr = queueDesc.shift()!;
+    const outs = outgoingMap.get(curr) || [];
+    for (const { target, edgeId } of outs) {
+      connectedEdgeIds.add(edgeId);
+      if (!visitedDescendants.has(target)) {
+        visitedDescendants.add(target);
+        connectedNodeIds.add(target);
+        queueDesc.push(target);
       }
     }
   }
 
-  // 2. Downstream (Descendants: โหนดนี้เรียกใช้หรือกระจายข้อมูลไปหาใครบ้าง)
-  const downQueue: string[] = [selectedNodeId];
-  const visitedDown = new Set<string>([selectedNodeId]);
-
-  while (downQueue.length > 0) {
-    const curr = downQueue.shift()!;
-    for (const edge of edges) {
-      if (edge.source === curr) {
-        connectedEdgeIds.add(edge.id);
-        if (!visitedDown.has(edge.target)) {
-          visitedDown.add(edge.target);
-          connectedNodeIds.add(edge.target);
-          downQueue.push(edge.target);
-        }
+  const visitedAncestors = new Set<string>();
+  const queueAnc = [selectedNodeId];
+  while (queueAnc.length > 0) {
+    const curr = queueAnc.shift()!;
+    const ins = incomingMap.get(curr) || [];
+    for (const { source, edgeId } of ins) {
+      connectedEdgeIds.add(edgeId);
+      if (!visitedAncestors.has(source)) {
+        visitedAncestors.add(source);
+        connectedNodeIds.add(source);
+        queueAnc.push(source);
       }
     }
   }
@@ -1994,12 +1963,13 @@ function computeTracePath(
 }
 
 /**
- * แปลง FlowNodeItem[] เป็น Node[] ของ React Flow พร้อมรองรับการ Focus / Highlight
+ * Transform domain node models into interactive React Flow node representations.
  */
 function toRfNodes(
   items: FlowNodeItem[],
   selectedNodeId: string | null,
-  connectedNodeIds: Set<string>
+  connectedNodeIds: Set<string>,
+  onInspectNode?: (path: string, fileType: NextFileType) => void
 ): Node<NodeData>[] {
   return (items ?? []).map((item, index) => {
     const pos = (item as unknown as { position?: { x: number; y: number } }).position ?? {
@@ -2014,29 +1984,43 @@ function toRfNodes(
 
     const isSelected = selectedNodeId === item.id;
     const isConnected = selectedNodeId ? isSelected || connectedNodeIds.has(item.id) : true;
-    const opacity = isConnected ? 1 : 0.22;
+    const opacity = isConnected ? 1 : 0.35;
 
     const nodeLabel = (
-      <div className="flex flex-col gap-1.5 text-left select-none">
+      <div className="flex flex-col gap-1.5 text-left select-none relative group">
         <div className="flex items-center justify-between">
           <span
-            className="text-[9px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded-md"
-            style={{ background: \`\${colors.border}1a\`, color: colors.border, border: \`1px solid \${colors.border}33\` }}
+            className="text-[9px] font-mono font-semibold uppercase tracking-wider px-2 py-0.5 rounded"
+            style={{ background: \`\${colors.border}15\`, color: colors.border, border: \`1px solid \${colors.border}30\` }}
           >
             {item.fileType}
           </span>
-          <span
-            className="w-1.5 h-1.5 rounded-full transition-transform"
-            style={{
-              background: colors.border,
-              boxShadow: isSelected ? \`0 0 10px \${colors.border}\` : isConnected && selectedNodeId ? \`0 0 6px \${colors.border}80\` : 'none',
-              transform: isSelected ? 'scale(1.5)' : 'scale(1)',
-            }}
-          />
+          <div className="flex items-center gap-1.5">
+            {onInspectNode && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onInspectNode(item.path, item.fileType);
+                }}
+                className="opacity-0 group-hover:opacity-100 hover:scale-105 p-1 rounded bg-slate-800 text-slate-300 hover:text-white transition-all border border-slate-700 cursor-pointer"
+                title="คลิกเพื่อดูโค้ดไฟล์นี้"
+              >
+                <Code2 className="w-3 h-3" />
+              </button>
+            )}
+            <span
+              className="w-1.5 h-1.5 rounded-full transition-transform"
+              style={{
+                background: colors.border,
+                transform: isSelected ? 'scale(1.4)' : 'scale(1)',
+              }}
+            />
+          </div>
         </div>
         <div
-          className={\`font-semibold text-xs truncate transition-colors \${
-            isSelected ? 'text-white font-bold' : isConnected ? 'text-slate-100' : 'text-slate-400'
+          className={\`font-medium text-xs truncate transition-colors \${
+            isSelected ? 'text-white font-semibold' : isConnected ? 'text-slate-200' : 'text-slate-400'
           }\`}
           title={item.path}
         >
@@ -2058,35 +2042,30 @@ function toRfNodes(
       data: { label: nodeLabel, path: item.path, fileType: item.fileType },
       style: {
         border: isSelected
-          ? \`2px solid \${colors.border}\`
+          ? '1.5px solid #ffffff'
           : isConnected && selectedNodeId
-          ? \`1.5px solid \${colors.border}aa\`
-          : \`1px solid \${colors.border}40\`,
-        background: '#0b1120',
-        color: '#f8fafc',
-        borderRadius: 12,
+          ? '1px solid #737373'
+          : '1px solid #262626',
+        background: '#0a0a0a',
+        color: '#ededed',
+        borderRadius: 6,
         padding: '12px 14px',
         fontSize: 12,
         width: 260,
         opacity,
-        transition: 'all 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
+        transition: 'all 0.15s ease',
         boxShadow: isSelected
-          ? \`0 0 24px -2px \${colors.border}60, 0 10px 25px -5px rgba(0, 0, 0, 0.7)\`
-          : isConnected && selectedNodeId
-          ? \`0 0 16px -4px \${colors.border}35, 0 8px 20px -4px rgba(0, 0, 0, 0.5)\`
-          : '0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.3)',
+          ? '0 0 0 1px #ffffff, 0 8px 30px rgba(255, 255, 255, 0.12)'
+          : '0 2px 8px rgba(0, 0, 0, 0.8)',
       },
     };
   });
 }
 
-/**
- * ป้ายกำกับที่เป็นคำซ้ำซ้อนระดับ boilerplate ซึ่งทำให้ผังรกเมื่อซ้อนทับกัน
- */
-const BOILERPLATE_LABELS = new Set(['shared UI', 'uses component', 'references']);
+const CRITICAL_ARCHITECTURAL_LABELS = new Set(['routes to', 'renders', 'server action', 'triggers', 'submits to', 'uses store']);
 
 /**
- * แปลง FlowEdgeItem[] เป็น Edge[] ของ React Flow พร้อมเส้นโค้ง Smooth Bezier และระบบ Focus ตลอดสาย
+ * Transform domain edge models into styled React Flow edge definitions.
  */
 function toRfEdges(
   items: FlowEdgeItem[],
@@ -2095,24 +2074,24 @@ function toRfEdges(
   labelMode: LabelFilterMode
 ): Edge[] {
   return (items ?? []).map((item) => {
-    const isConnected = selectedNodeId
-      ? connectedEdgeIds.has(item.id)
-      : true;
+    const isConnected = selectedNodeId ? connectedEdgeIds.has(item.id) : true;
 
-    // เลือกการแสดง Label ตามโหมด
     let displayLabel: string | undefined = undefined;
     if (labelMode === 'all') {
       displayLabel = item.label;
     } else if (labelMode === 'smart') {
-      // แสดงเฉพาะคำสำคัญ หรือเส้นที่กำลังถูก Focus ตลอดสาย
-      if (selectedNodeId && isConnected) {
-        displayLabel = item.label;
-      } else if (item.label && !BOILERPLATE_LABELS.has(item.label)) {
-        displayLabel = item.label;
+      if (selectedNodeId) {
+        if (isConnected) {
+          displayLabel = item.label;
+        }
+      } else {
+        if (item.label && CRITICAL_ARCHITECTURAL_LABELS.has(item.label.toLowerCase())) {
+          displayLabel = item.label;
+        }
       }
     }
 
-    const strokeColor = item.style?.stroke || '#64748b';
+    const strokeColor = item.style?.stroke || '#737373';
     const isHighlighted = selectedNodeId && isConnected;
     const isDimmed = selectedNodeId && !isConnected;
 
@@ -2122,29 +2101,29 @@ function toRfEdges(
       target: item.target,
       label: displayLabel,
       animated: isHighlighted ? true : Boolean(item.animated),
-      type: 'bezier',
+      type: 'default',
       markerEnd: {
         type: MarkerType.ArrowClosed,
         width: 14,
         height: 14,
-        color: isHighlighted ? (strokeColor as string) : isDimmed ? '#1e293b' : '#64748b',
+        color: isHighlighted ? (strokeColor as string) : isDimmed ? '#1c1c1c' : '#525252',
       },
       style: {
-        stroke: isHighlighted ? (strokeColor as string) : isDimmed ? '#1e293b' : (strokeColor as string),
-        strokeWidth: isHighlighted ? 2.5 : 1.5,
-        opacity: isDimmed ? 0.06 : 0.85,
-        transition: 'all 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
+        stroke: isHighlighted ? (strokeColor as string) : isDimmed ? '#1c1c1c' : '#525252',
+        strokeWidth: isHighlighted ? 2 : 1.2,
+        opacity: isDimmed ? 0.2 : 0.85,
+        transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
       },
       labelStyle: {
-        fill: isHighlighted ? '#ffffff' : '#94a3b8',
+        fill: isHighlighted ? '#ffffff' : '#a1a1aa',
         fontSize: 10,
         fontWeight: isHighlighted ? 600 : 500,
         fontFamily: 'var(--font-sans)',
       },
       labelBgStyle: {
-        fill: '#090d16',
-        fillOpacity: 0.92,
-        stroke: isHighlighted ? strokeColor : '#1e293b',
+        fill: '#0a0a0a',
+        fillOpacity: 0.95,
+        stroke: isHighlighted ? strokeColor : '#262626',
         strokeWidth: 1,
       },
       labelBgPadding: [6, 3] as [number, number],
@@ -2153,25 +2132,39 @@ function toRfEdges(
   });
 }
 
-/**
- * คอมโพเนนต์ผืนผ้าใบ Interactive Flowchart
- * รองรับการซูม แพน ย้ายโหนด คลิก Focus เส้นทางเชื่อมโยงตลอดสาย (Full Trace) และปรับโหมดป้ายกำกับ
- */
-export function FlowCanvas({ nodes, edges, onSelectNode }: FlowCanvasProps) {
+// คอมโพเนนต์ภายในที่ใช้ hook ของ React Flow ได้โดยตรง
+function FlowCanvasInner({ nodes, edges, onSelectNode }: FlowCanvasProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [labelMode, setLabelMode] = useState<LabelFilterMode>('smart');
   const [traceMode, setTraceMode] = useState<TraceMode>('full');
   const [showMiniMap, setShowMiniMap] = useState<boolean>(false);
+  const [autoInspect, setAutoInspect] = useState<boolean>(false);
+  const [showSettingsMenu, setShowSettingsMenu] = useState<boolean>(false);
 
-  // คำนวณเซตของโหนดและเส้นเชื่อมที่เชื่อมโยงกับ selectedNodeId ตลอดสาย (Ancestors + Descendants)
+  // สเตตกล่องค้นหาโหนด (Node Finder)
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+  const settingsMenuRef = useRef<HTMLDivElement>(null);
+
+  const { setCenter, fitView } = useReactFlow();
+
   const { connectedNodeIds, connectedEdgeIds } = useMemo(
     () => computeTracePath(selectedNodeId, edges, traceMode),
     [selectedNodeId, edges, traceMode]
   );
 
+  const handleInspect = useCallback(
+    (path: string, fileType: NextFileType) => {
+      onSelectNode?.(path, fileType);
+    },
+    [onSelectNode]
+  );
+
   const initialNodes = useMemo(
-    () => toRfNodes(nodes, selectedNodeId, connectedNodeIds),
-    [nodes, selectedNodeId, connectedNodeIds]
+    () => toRfNodes(nodes, selectedNodeId, connectedNodeIds, handleInspect),
+    [nodes, selectedNodeId, connectedNodeIds, handleInspect]
   );
 
   const initialEdges = useMemo(
@@ -2182,17 +2175,88 @@ export function FlowCanvas({ nodes, edges, onSelectNode }: FlowCanvasProps) {
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node<NodeData>>(initialNodes);
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge>(initialEdges);
 
+  // คงตำแหน่งที่ผู้ใช้ลากไว้ ไม่ให้รีเซ็ตกลับเป็นตำแหน่งจาก layout ทุกครั้งที่เปลี่ยนโหนดที่เลือก
   useEffect(() => {
-    setRfNodes(initialNodes);
+    setRfNodes((prevNodes) => {
+      const prevPositions = new Map(prevNodes.map((n) => [n.id, n.position]));
+      return initialNodes.map((node) => {
+        const prevPosition = prevPositions.get(node.id);
+        return prevPosition ? { ...node, position: prevPosition } : node;
+      });
+    });
   }, [initialNodes, setRfNodes]);
 
   useEffect(() => {
     setRfEdges(initialEdges);
   }, [initialEdges, setRfEdges]);
 
-  // ฟังก์ชันล้างการ Focus โหนด
+  // ล้างการ Focus
   const handleClearFocus = useCallback(() => {
     setSelectedNodeId(null);
+  }, []);
+
+  // เลื่อนกล้องและซูมไปหาโหนดเป้าหมาย (Pan to Node)
+  const focusAndPanToNode = useCallback(
+    (nodeItem: FlowNodeItem) => {
+      setSelectedNodeId(nodeItem.id);
+      setIsSearchOpen(false);
+      setSearchQuery('');
+
+      const pos = (nodeItem as unknown as { position?: { x: number; y: number } }).position;
+      if (pos) {
+        void setCenter(pos.x + 130, pos.y + 40, { zoom: 1.2, duration: 500 });
+      }
+
+      if (autoInspect) {
+        onSelectNode?.(nodeItem.path, nodeItem.fileType);
+      }
+    },
+    [setCenter, autoInspect, onSelectNode]
+  );
+
+  // คีย์ลัดระดับ Global (Ctrl+K หรือ / เพื่อค้นหาโหนด, Esc เพื่อล้างโฟกัส)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        setIsSearchOpen(true);
+      } else if (e.key === '/' && document.activeElement?.tagName !== 'INPUT') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        setIsSearchOpen(true);
+      } else if (e.key === 'Escape') {
+        setIsSearchOpen(false);
+        setShowSettingsMenu(false);
+        if (selectedNodeId) {
+          handleClearFocus();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [selectedNodeId, handleClearFocus]);
+
+  // รายการผลลัพธ์การค้นหา
+  const searchResults = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const query = searchQuery.trim().toLowerCase();
+    return nodes.filter((n) => n.path.toLowerCase().includes(query)).slice(0, 10);
+  }, [nodes, searchQuery]);
+
+  // ปิด Dropdown เมื่อคลิกข้างนอก
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as globalThis.Node;
+      if (searchContainerRef.current && !searchContainerRef.current.contains(target)) {
+        setIsSearchOpen(false);
+      }
+      if (settingsMenuRef.current && !settingsMenuRef.current.contains(target)) {
+        setShowSettingsMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   if (!nodes || nodes.length === 0) {
@@ -2204,104 +2268,226 @@ export function FlowCanvas({ nodes, edges, onSelectNode }: FlowCanvasProps) {
   }
 
   return (
-    <div className="h-[620px] w-full rounded-2xl border border-slate-800 bg-slate-950 overflow-hidden relative font-sans">
-      {/* Floating Canvas Toolbar */}
-      <div className="absolute top-3.5 right-3.5 z-20 flex flex-wrap items-center gap-2 bg-slate-900/90 backdrop-blur-md border border-slate-800 rounded-xl p-1.5 shadow-lg text-xs">
-        {/* Clear Focus Button */}
-        {selectedNodeId && (
-          <button
-            type="button"
-            onClick={handleClearFocus}
-            className="px-2.5 py-1 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/30 transition flex items-center gap-1 cursor-pointer font-medium"
-            title="คลิกเพื่อยกเลิกการ Focus โหนด"
-          >
-            <span>✕ ล้าง Focus</span>
-          </button>
-        )}
+    <div className="h-[620px] w-full rounded-lg border border-[#262626] bg-[#000000] overflow-hidden relative font-sans shadow-2xl">
+      {/* Vercel-style Precision Toolbar */}
+      <div className="absolute top-3.5 right-3.5 z-20 flex items-center gap-2 max-w-[90%]">
+        
+        {/* Dock 1: Monochrome Node Search Command Bar */}
+        <div ref={searchContainerRef} className="relative">
+          <div className="flex items-center gap-2 bg-[#000000]/90 backdrop-blur-md border border-[#262626] rounded-md px-2.5 py-1.5 text-zinc-300 shadow-md focus-within:border-white focus-within:ring-1 focus-within:ring-white/20 transition">
+            <Search className="w-3.5 h-3.5 text-zinc-400" />
+            <input
+              ref={searchInputRef}
+              type="text"
+              placeholder="ค้นหาโหนด... (Ctrl+K)"
+              value={searchQuery}
+              onFocus={() => setIsSearchOpen(true)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setIsSearchOpen(true);
+              }}
+              className="w-28 sm:w-36 bg-transparent text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none font-sans"
+            />
+            {searchQuery ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  setIsSearchOpen(false);
+                }}
+                className="text-zinc-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            ) : (
+              <kbd className="hidden sm:inline-block text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#171717] text-zinc-400 border border-[#262626]">
+                /
+              </kbd>
+            )}
+          </div>
 
-        {/* Trace Mode Switcher (Full Path vs Direct) */}
+          {/* Search Dropdown Results */}
+          {isSearchOpen && searchResults.length > 0 && (
+            <div className="absolute right-0 top-full mt-1.5 w-72 max-h-64 overflow-y-auto bg-[#0a0a0a] border border-[#262626] rounded-md shadow-2xl z-50 p-1.5 flex flex-col gap-1">
+              <div className="px-2 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                ผลการค้นหา ({searchResults.length})
+              </div>
+              {searchResults.map((item) => {
+                const color = getNodeColorConfig(item.fileType).border;
+                const fileName = item.path.split('/').pop() || item.path;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => focusAndPanToNode(item)}
+                    className="flex items-center justify-between gap-2 px-2 py-1.5 rounded hover:bg-[#171717] text-left transition cursor-pointer group"
+                  >
+                    <div className="flex flex-col truncate">
+                      <span className="text-xs font-semibold text-zinc-200 group-hover:text-white truncate">
+                        {fileName}
+                      </span>
+                      <span className="text-[10px] text-zinc-400 font-mono truncate">
+                        {item.path}
+                      </span>
+                    </div>
+                    <span
+                      className="text-[9px] font-mono px-1.5 py-0.5 rounded uppercase font-semibold shrink-0"
+                      style={{ background: \`\${color}15\`, color, border: \`1px solid \${color}30\` }}
+                    >
+                      {item.fileType}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Dock 2: Trace Focus State Action */}
         {selectedNodeId && (
-          <div className="flex items-center bg-slate-950/80 rounded-lg p-0.5 border border-slate-800">
+          <div className="flex items-center gap-1 bg-[#000000]/90 backdrop-blur-md border border-[#262626] rounded-md p-1 shadow-md text-xs">
             <button
               type="button"
-              onClick={() => setTraceMode('full')}
-              className={\`px-2 py-0.5 rounded text-[11px] font-medium transition cursor-pointer \${
-                traceMode === 'full'
-                  ? 'bg-sky-500/20 text-sky-300 font-semibold'
-                  : 'text-slate-400 hover:text-slate-200'
-              }\`}
-              title="เรืองแสงสืบย้อนต้นทางและปลายทางครบทั้งสายการไหล"
+              onClick={handleClearFocus}
+              className="px-2 py-1 rounded bg-[#171717] hover:bg-[#262626] text-zinc-300 hover:text-white transition flex items-center gap-1 cursor-pointer font-medium text-[11px]"
+              title="ยกเลิกการ Focus โหนด (Esc)"
             >
-              ทั้งสาย
+              <X className="w-3 h-3 text-rose-400" />
+              <span>ล้าง Focus</span>
             </button>
-            <button
-              type="button"
-              onClick={() => setTraceMode('direct')}
-              className={\`px-2 py-0.5 rounded text-[11px] font-medium transition cursor-pointer \${
-                traceMode === 'direct'
-                  ? 'bg-sky-500/20 text-sky-300 font-semibold'
-                  : 'text-slate-400 hover:text-slate-200'
-              }\`}
-              title="เรืองแสงเฉพาะโหนดที่เชื่อมตรง 1 สเต็ป"
-            >
-              1 สเต็ป
-            </button>
+            <div className="h-3 w-[1px] bg-[#262626]" />
+            <div className="flex items-center bg-[#0a0a0a] rounded p-0.5 border border-[#262626]">
+              <button
+                type="button"
+                onClick={() => setTraceMode('full')}
+                className={\`px-2 py-0.5 rounded text-[10px] font-medium transition cursor-pointer \${
+                  traceMode === 'full'
+                    ? 'bg-white text-black font-semibold'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }\`}
+                title="เรืองแสงสืบย้อนต้นทางและปลายทางครบทั้งสาย"
+              >
+                ทั้งสาย
+              </button>
+              <button
+                type="button"
+                onClick={() => setTraceMode('direct')}
+                className={\`px-2 py-0.5 rounded text-[10px] font-medium transition cursor-pointer \${
+                  traceMode === 'direct'
+                    ? 'bg-white text-black font-semibold'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }\`}
+                title="เรืองแสงเฉพาะโหนดที่เชื่อมต่อติดกันโดยตรง"
+              >
+                1-Step
+              </button>
+            </div>
           </div>
         )}
 
-        {/* Label Mode Switcher */}
-        <div className="flex items-center bg-slate-950/80 rounded-lg p-0.5 border border-slate-800">
-          <button
-            type="button"
-            onClick={() => setLabelMode('smart')}
-            className={\`px-2.5 py-1 rounded-md text-[11px] font-medium transition cursor-pointer \${
-              labelMode === 'smart'
-                ? 'bg-slate-800 text-sky-400 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }\`}
-            title="ซ่อนคำซ้ำซ้อน แสดงเฉพาะเส้นทางสำคัญ"
-          >
-            สมาร์ท
-          </button>
-          <button
-            type="button"
-            onClick={() => setLabelMode('all')}
-            className={\`px-2.5 py-1 rounded-md text-[11px] font-medium transition cursor-pointer \${
-              labelMode === 'all'
-                ? 'bg-slate-800 text-sky-400 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }\`}
-            title="แสดงป้ายกำกับความสัมพันธ์ทุกเส้น"
-          >
-            ป้ายทั้งหมด
-          </button>
-          <button
-            type="button"
-            onClick={() => setLabelMode('none')}
-            className={\`px-2.5 py-1 rounded-md text-[11px] font-medium transition cursor-pointer \${
-              labelMode === 'none'
-                ? 'bg-slate-800 text-sky-400 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }\`}
-            title="ซ่อนป้ายกำกับทั้งหมดเพื่อความสบายตา"
-          >
-            ปิดป้าย
-          </button>
+        {/* Dock 3: View Options & Menu Dropdown */}
+        <div ref={settingsMenuRef} className="relative">
+          <div className="flex items-center gap-1 bg-[#000000]/90 backdrop-blur-md border border-[#262626] rounded-md p-1 shadow-md text-xs">
+            <button
+              type="button"
+              onClick={() => setShowMiniMap((prev) => !prev)}
+              className={\`p-1.5 rounded transition cursor-pointer \${
+                showMiniMap ? 'bg-white text-black' : 'text-zinc-400 hover:text-white hover:bg-[#171717]'
+              }\`}
+              title="เปิด/ปิด แผนที่ย่อ MiniMap"
+            >
+              <MapIcon className="w-3.5 h-3.5" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowSettingsMenu((prev) => !prev)}
+              className={\`p-1.5 rounded transition cursor-pointer flex items-center gap-1 \${
+                showSettingsMenu ? 'bg-[#262626] text-white' : 'text-zinc-400 hover:text-white hover:bg-[#171717]'
+              }\`}
+              title="ตัวเลือกการแสดงผลเพิ่มเติม"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Settings Menu Dropdown */}
+          {showSettingsMenu && (
+            <div className="absolute right-0 top-full mt-1.5 w-56 bg-[#0a0a0a] border border-[#262626] rounded-md shadow-2xl z-50 p-2 flex flex-col gap-2 text-xs">
+              <div>
+                <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block mb-1">
+                  การแสดงป้ายกำกับเส้น
+                </span>
+                <div className="grid grid-cols-3 gap-1 bg-[#000000] p-1 rounded border border-[#262626]">
+                  <button
+                    type="button"
+                    onClick={() => setLabelMode('smart')}
+                    className={\`py-1 rounded text-[10px] font-medium transition cursor-pointer \${
+                      labelMode === 'smart' ? 'bg-[#262626] text-white font-semibold' : 'text-zinc-400 hover:text-white'
+                    }\`}
+                  >
+                    สมาร์ท
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLabelMode('all')}
+                    className={\`py-1 rounded text-[10px] font-medium transition cursor-pointer \${
+                      labelMode === 'all' ? 'bg-[#262626] text-white font-semibold' : 'text-zinc-400 hover:text-white'
+                    }\`}
+                  >
+                    ทั้งหมด
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLabelMode('none')}
+                    className={\`py-1 rounded text-[10px] font-medium transition cursor-pointer \${
+                      labelMode === 'none' ? 'bg-[#262626] text-white font-semibold' : 'text-zinc-400 hover:text-white'
+                    }\`}
+                  >
+                    ปิด
+                  </button>
+                </div>
+              </div>
+
+              <div className="h-[1px] bg-[#262626]" />
+
+              <div>
+                <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block mb-1">
+                  พฤติกรรมการคลิก
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setAutoInspect((prev) => !prev)}
+                  className="w-full flex items-center justify-between p-1.5 rounded hover:bg-[#171717] transition cursor-pointer"
+                >
+                  <span className="text-zinc-300 text-[11px]">ดูโค้ดอัตโนมัติ</span>
+                  <span
+                    className={\`text-[10px] font-mono px-1.5 py-0.5 rounded font-semibold \${
+                      autoInspect ? 'bg-white text-black' : 'bg-[#171717] text-zinc-400'
+                    }\`}
+                  >
+                    {autoInspect ? 'เปิด' : 'ปิด'}
+                  </span>
+                </button>
+              </div>
+
+              <div className="h-[1px] bg-[#262626]" />
+
+              <button
+                type="button"
+                onClick={() => {
+                  void fitView({ padding: 0.2, duration: 400 });
+                  setShowSettingsMenu(false);
+                }}
+                className="w-full flex items-center gap-1.5 p-1.5 rounded hover:bg-[#171717] text-zinc-300 hover:text-white transition cursor-pointer text-[11px]"
+              >
+                <Layers className="w-3.5 h-3.5 text-zinc-400" />
+                <span>จัดมุมมองพอดีจอ (Fit View)</span>
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* MiniMap Toggle */}
-        <button
-          type="button"
-          onClick={() => setShowMiniMap((prev) => !prev)}
-          className={\`px-2.5 py-1 rounded-lg border text-[11px] font-medium transition cursor-pointer flex items-center gap-1.5 \${
-            showMiniMap
-              ? 'bg-slate-800 border-slate-700 text-white'
-              : 'bg-transparent border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
-          }\`}
-          title="เปิด/ปิด แผนที่ย่อ"
-        >
-          <span>แผนที่ย่อ</span>
-        </button>
       </div>
 
       <ReactFlow
@@ -2312,31 +2498,32 @@ export function FlowCanvas({ nodes, edges, onSelectNode }: FlowCanvasProps) {
         onNodeClick={(_, node) => {
           setSelectedNodeId((prev) => (prev === node.id ? null : node.id));
           const data = node.data as NodeData;
-          onSelectNode?.(data.path, data.fileType);
+          if (autoInspect) {
+            onSelectNode?.(data.path, data.fileType);
+          }
         }}
         onPaneClick={handleClearFocus}
         colorMode="dark"
         fitView
         fitViewOptions={{ padding: 0.2 }}
         minZoom={0.1}
-        proOptions={{ hideAttribution: true }}
         onlyRenderVisibleElements={true}
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#1e293b" />
+        <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="#262626" />
         <Controls position="bottom-left" />
         {showMiniMap && (
           <MiniMap
             pannable
             zoomable
             position="bottom-right"
-            maskColor="rgba(2, 6, 23, 0.75)"
+            maskColor="rgba(0, 0, 0, 0.85)"
             style={{
-              background: '#090d16',
-              border: '1px solid #1e293b',
-              borderRadius: '12px',
+              background: '#0a0a0a',
+              border: '1px solid #262626',
+              borderRadius: '6px',
               width: 170,
               height: 110,
-              boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.6)',
+              boxShadow: '0 8px 30px rgba(0, 0, 0, 0.9)',
             }}
             nodeColor={(node) => getNodeColorConfig((node.data as NodeData).fileType).border}
           />
@@ -2344,11 +2531,23 @@ export function FlowCanvas({ nodes, edges, onSelectNode }: FlowCanvasProps) {
       </ReactFlow>
     </div>
   );
+}
+
+/**
+ * Main interactive flowchart canvas component wrapped with ReactFlowProvider.
+ */
+export function FlowCanvas(props: FlowCanvasProps) {
+  return (
+    <ReactFlowProvider>
+      <FlowCanvasInner {...props} />
+    </ReactFlowProvider>
+  );
 }`;
 
 const RAW_SIDEDRAWER = `'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { X, ExternalLink, Copy, Check, Loader2 } from 'lucide-react';
 import { getLanguageFromPath, formatCodeSnippet, highlightCodeWithPrism } from '@/lib/code-viewer';
 
 export interface SideDrawerProps {
@@ -2358,8 +2557,12 @@ export interface SideDrawerProps {
   fileType?: string;
   rawCode?: string;
   githubRawUrl?: string;
+  isLoading?: boolean;
 }
 
+/**
+ * Slide-over drawer component for inspecting source code with syntax highlighting.
+ */
 export function SideDrawer({
   isOpen,
   onClose,
@@ -2367,20 +2570,36 @@ export function SideDrawer({
   fileType = 'other',
   rawCode = '',
   githubRawUrl = '',
+  isLoading = false,
 }: SideDrawerProps) {
   const [copied, setCopied] = useState(false);
+  const [fullCodeFilePath, setFullCodeFilePath] = useState<string | null>(null);
+  const showFullCode = Boolean(filePath && fullCodeFilePath === filePath);
+  const drawerRef = useRef<HTMLDivElement>(null);
+
+  // ปิด Drawer เมื่อกดปุ่ม Escape (Keyboard Accessibility)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   const { formattedCode, totalLines, isTruncated, language, highlightedHtml } = useMemo(() => {
     const lang = getLanguageFromPath(filePath);
-    const snippet = formatCodeSnippet(rawCode, 300);
+    const lineLimit = showFullCode ? 20000 : 300;
+    const snippet = formatCodeSnippet(rawCode, lineLimit);
     return {
       formattedCode: snippet.code,
       totalLines: snippet.totalLines,
-      isTruncated: snippet.isTruncated,
+      isTruncated: !showFullCode && snippet.isTruncated,
       language: lang,
       highlightedHtml: highlightCodeWithPrism(snippet.code, lang),
     };
-  }, [filePath, rawCode]);
+  }, [filePath, rawCode, showFullCode]);
 
   const handleCopy = async () => {
     if (!rawCode) return;
@@ -2394,55 +2613,115 @@ export function SideDrawer({
   if (!isOpen) return null;
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Code Inspector Drawer"
-      className="fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col bg-slate-900 border-l border-slate-700 text-slate-100 shadow-2xl"
-    >
-      <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
-        <div className="flex flex-col gap-1 overflow-hidden">
-          <div className="flex items-center gap-2">
-            <span data-testid="file-type-badge" className="rounded px-2 py-0.5 text-xs font-semibold uppercase bg-sky-500/20 text-sky-400 border border-sky-500/30">
-              {fileType}
-            </span>
-            <span className="text-xs text-slate-400">({language})</span>
-          </div>
-          <h2 title={filePath} className="truncate text-sm font-mono text-slate-200">
-            {filePath || 'No file selected'}
-          </h2>
-        </div>
-        <button onClick={onClose} aria-label="Close drawer" className="p-2 text-slate-400 hover:text-white">✕</button>
-      </div>
+    <div className="fixed inset-0 z-50 flex justify-end">
+      {/* Backdrop: ปิด Drawer เมื่อคลิกพื้นที่ว่างรอบนอก */}
+      <div 
+        className="fixed inset-0 bg-black/75 backdrop-blur-xs transition-opacity cursor-pointer"
+        onClick={onClose}
+        aria-hidden="true"
+      />
 
-      <div className="flex items-center justify-between border-b border-slate-800/80 bg-slate-950/40 px-6 py-2 text-xs text-slate-400">
-        <div>
-          <span>{totalLines} lines</span>
-          {isTruncated && <span className="ml-2 text-amber-400">(Truncated to first 300 lines)</span>}
-        </div>
-        <div className="flex items-center gap-2">
-          {githubRawUrl && (
-            <a href={githubRawUrl} target="_blank" rel="noopener noreferrer" className="rounded bg-slate-800 px-2.5 py-1 text-slate-300">
-              Open on GitHub ↗
-            </a>
-          )}
-          <button onClick={handleCopy} className="rounded bg-slate-800 px-2.5 py-1 text-slate-300">
-            {copied ? '✓ Copied' : 'Copy Code'}
+      {/* แผง Drawer ส่องโค้ด สไตล์ Vercel Code Inspector */}
+      <div
+        ref={drawerRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Code Inspector Drawer"
+        className="relative z-10 flex w-full max-w-2xl flex-col bg-[#000000] border-l border-[#262626] text-[#ededed] shadow-2xl animate-in slide-in-from-right duration-150"
+      >
+        {/* แถบหัว Drawer */}
+        <div className="flex items-center justify-between border-b border-[#262626] px-6 py-4 bg-[#0a0a0a]">
+          <div className="flex flex-col gap-1 overflow-hidden">
+            <div className="flex items-center gap-2">
+              <span data-testid="file-type-badge" className="rounded px-2 py-0.5 text-xs font-mono font-semibold uppercase bg-white text-black">
+                {fileType}
+              </span>
+              <span className="text-xs text-zinc-400 font-mono">({language})</span>
+            </div>
+            <h2 title={filePath} className="truncate text-sm font-mono text-zinc-200">
+              {filePath || 'ไม่ได้เลือกไฟล์'}
+            </h2>
+          </div>
+          <button 
+            onClick={onClose} 
+            aria-label="Close drawer" 
+            className="p-1.5 rounded text-zinc-400 hover:text-white hover:bg-[#171717] transition-colors cursor-pointer"
+            title="ปิดหน้าต่าง (Esc)"
+          >
+            <X className="w-5 h-5" />
           </button>
         </div>
-      </div>
 
-      <div className="relative flex-1 overflow-auto p-6 font-mono text-sm bg-slate-950">
-        <pre className="m-0 overflow-x-auto">
-          <code className={\`language-\${language}\`} dangerouslySetInnerHTML={{ __html: highlightedHtml || formattedCode }} />
-        </pre>
+        {/* แถบควบคุมและสถิติบรรทัด */}
+        <div className="flex items-center justify-between border-b border-[#262626] bg-[#000000] px-6 py-2.5 text-xs text-zinc-400 font-mono">
+          <div className="flex items-center gap-2">
+            <span>{totalLines} บรรทัด</span>
+            {isTruncated && (
+              <span className="text-amber-400 font-mono text-[11px]">(แสดง 300 บรรทัดแรก)</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {isTruncated && (
+              <button
+                type="button"
+                onClick={() => setFullCodeFilePath(filePath || null)}
+                className="rounded bg-[#171717] hover:bg-[#262626] px-2.5 py-1 text-white text-xs transition-colors cursor-pointer border border-[#262626]"
+              >
+                ดูโค้ดทั้งหมด
+              </button>
+            )}
+            {githubRawUrl && (
+              <a 
+                href={githubRawUrl} 
+                target="_blank" 
+                rel="noopener noreferrer" 
+                className="flex items-center gap-1.5 rounded bg-[#171717] hover:bg-[#262626] px-2.5 py-1 text-zinc-300 transition-colors cursor-pointer border border-[#262626]"
+              >
+                <span>เปิดบน GitHub</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+            <button 
+              onClick={handleCopy} 
+              disabled={isLoading || !rawCode}
+              className="flex items-center gap-1.5 rounded bg-[#171717] hover:bg-[#262626] disabled:opacity-50 px-2.5 py-1 text-zinc-300 transition-colors cursor-pointer border border-[#262626]"
+            >
+              {copied ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-emerald-400">คัดลอกแล้ว</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>คัดลอกโค้ด</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* พื้นที่แสดงโค้ด */}
+        <div className="relative flex-1 overflow-auto p-6 font-mono text-sm bg-[#000000]">
+          {isLoading ? (
+            <div className="flex h-full flex-col items-center justify-center gap-2 text-slate-400">
+              <Loader2 className="w-6 h-6 animate-spin text-sky-400" />
+              <span className="text-xs">กำลังโหลดซอร์สโค้ดจาก GitHub...</span>
+            </div>
+          ) : rawCode ? (
+            <pre className="m-0 overflow-x-auto">
+              <code className={\`language-\${language}\`} dangerouslySetInnerHTML={{ __html: highlightedHtml || formattedCode }} />
+            </pre>
+          ) : (
+            <div className="flex h-full items-center justify-center text-slate-500 text-xs">
+              ไม่พบเนื้อหาโค้ดในไฟล์นี้
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
-}
-
-// รองรับทั้งแบบ Named Export และ Default Export
-export default SideDrawer;`;
+}`;
 
 const RAW_LAYOUT = `import type { Metadata } from "next";
 import { Geist, Geist_Mono, IBM_Plex_Sans_Thai } from "next/font/google";
@@ -2466,7 +2745,7 @@ const ibmPlexSansThai = IBM_Plex_Sans_Thai({
 });
 
 export const metadata: Metadata = {
-  title: "GitFlow Visualizer",
+  title: "Git Flowchart",
   description: "Next.js App Router Architecture & Flowchart Visualizer",
 };
 
@@ -2489,7 +2768,7 @@ export default function RootLayout({
 
 const RAW_TYPES = `// src/types/index.ts
 
-export type NextFileType = 'page' | 'layout' | 'action' | 'middleware' | 'store' | 'component' | 'api' | 'other';
+export type NextFileType = 'page' | 'layout' | 'action' | 'middleware' | 'store' | 'component' | 'hook' | 'api' | 'other';
 
 export interface GitHubTreeItem {
   path: string;
@@ -2562,8 +2841,8 @@ const RAW_GLOBALS = `@import "tailwindcss";
 }
 
 :root {
-  --background: #090d16;
-  --foreground: #f1f5f9;
+  --background: #000000;
+  --foreground: #ededed;
 }
 
 body {
@@ -2576,1270 +2855,591 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Impeccable Browser Surfaces */
+/* Vercel-style Precision Grid Background */
+.bg-grid-pattern {
+  background-size: 32px 32px;
+  background-image: 
+    linear-gradient(to right, rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+}
+
+/* Vercel-style Monochrome Text Selection */
 ::selection {
-  background: rgba(56, 189, 248, 0.25);
+  background: rgba(255, 255, 255, 0.2);
   color: #ffffff;
 }
 
-/* Custom Scrollbars */
+/* Vercel-style Ultra-thin Minimalist Scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #090d16;
+  background: #000000;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #1e293b;
-  border-radius: 9999px;
+  background: #262626;
+  border-radius: 2px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+  background: #404040;
 }
 `;
 
-const RAW_TEST1 = `// src/tests/1_github.test.ts
-import { describe, it, expect } from 'vitest';
-import { parseGitHubUrl, buildGitHubApiUrl, buildGitHubHeaders, buildGitHubRawUrl, buildGitHubBlobUrl } from '../lib/github';
+const RAW_TEST1 = `import { describe, it, expect } from 'vitest';
+import { parseGitHubUrl, buildGitHubApiUrl, buildGitHubHeaders, buildGitHubRawUrl, buildGitHubBlobUrl } from './github';
 
-describe('คนที่ 1: github.ts (Data Ingestion & GitHub Service)', () => {
-  describe('parseGitHubUrl', () => {
-    it('แกะ url แบบ https ปกติได้', () => {
-      expect(parseGitHubUrl('https://github.com/chsnor/testauth')).toEqual({
-        owner: 'chsnor',
-        repo: 'testauth'
-      });
-    });
-
-    it('แกะ url แบบ http ได้', () => {
-      expect(parseGitHubUrl('http://github.com/chsnor/testauth')).toEqual({
-        owner: 'chsnor',
-        repo: 'testauth'
-      });
-    });
-
-    it('แกะ url ที่ไม่มี https นำหน้าได้', () => {
-      expect(parseGitHubUrl('github.com/chsnor/testauth')).toEqual({
-        owner: 'chsnor',
-        repo: 'testauth'
-      });
-    });
-
-    it('แกะ url ที่มี www ได้', () => {
-      expect(parseGitHubUrl('https://www.github.com/chsnor/testauth')).toEqual({
-        owner: 'chsnor',
-        repo: 'testauth'
-      });
-    });
-
-    it('ตัด .git ท้าย url ออกได้', () => {
-      expect(parseGitHubUrl('https://github.com/chsnor/testauth.git')).toEqual({
-        owner: 'chsnor',
-        repo: 'testauth'
-      });
-    });
-
-    it('ตัด slash ท้าย url หลายตัวได้', () => {
-      expect(parseGitHubUrl('https://github.com/chsnor/testauth///')).toEqual({
-        owner: 'chsnor',
-        repo: 'testauth'
-      });
-    });
-
-    it('ตัด query string กับ hash ออกได้', () => {
-      expect(parseGitHubUrl('https://github.com/chsnor/testauth?tab=repositories#readme')).toEqual({
-        owner: 'chsnor',
-        repo: 'testauth'
-      });
-    });
-
-    it('ตัด path ข้างหลัง เช่น /tree/main ออกได้', () => {
-      expect(parseGitHubUrl('https://github.com/chsnor/testauth/tree/main/src')).toEqual({
-        owner: 'chsnor',
-        repo: 'testauth'
-      });
-    });
-
-    it('ถ้าใส่ค่าว่างต้องได้ null', () => {
-      expect(parseGitHubUrl('')).toBeNull();
-      expect(parseGitHubUrl('    ')).toBeNull();
-    });
-
-    it('ถ้าไม่ใช่เว็บ github ต้องได้ null', () => {
-      expect(parseGitHubUrl('https://gitlab.com/chsnor/testauth')).toBeNull();
-      expect(parseGitHubUrl('https://google.com')).toBeNull();
-    });
-
-    it('ถ้าไม่มีชื่อ repo ต้องได้ null', () => {
-      expect(parseGitHubUrl('https://github.com/chsnor')).toBeNull();
-      expect(parseGitHubUrl('https://github.com/chsnor/')).toBeNull();
+describe('parseGitHubUrl', () => {
+  it('แยก owner/repo จาก URL ปกติ', () => {
+    expect(parseGitHubUrl('https://github.com/chsnor/nextjs101')).toEqual({
+      owner: 'chsnor',
+      repo: 'nextjs101',
+      branch: undefined,
     });
   });
 
-  describe('buildGitHubApiUrl', () => {
-    it('ต่อ url ดึง tree เป็น main ตามปกติ', () => {
-      expect(buildGitHubApiUrl('chsnor', 'testauth')).toBe(
-        'https://api.github.com/repos/chsnor/testauth/git/trees/main?recursive=1'
-      );
+  it('รับ URL ที่ไม่มี protocol และตัด .git ออก', () => {
+    expect(parseGitHubUrl('github.com/owner/repo')).toEqual({
+      owner: 'owner',
+      repo: 'repo',
+      branch: undefined,
     });
-
-    it('ต่อ url ดึง branch อื่นได้', () => {
-      expect(buildGitHubApiUrl('chsnor', 'testauth', 'master')).toBe(
-        'https://api.github.com/repos/chsnor/testauth/git/trees/master?recursive=1'
-      );
-    });
-  });
-
-  describe('buildGitHubHeaders (รองรับ Token ทางเลือก)', () => {
-    it('ถ้าไม่ใส่ token มา ต้องมี header User-Agent ขั้นต่ำ', () => {
-      const headers = buildGitHubHeaders();
-      expect(headers['User-Agent']).toBe('GitFlow-Visualizer');
-      expect(headers['Authorization']).toBeUndefined();
-    });
-
-    it('ถ้าใส่ token ว่างเปล่ามา ต้องไม่มี Authorization', () => {
-      const headers = buildGitHubHeaders('   ');
-      expect(headers['Authorization']).toBeUndefined();
-    });
-
-    it('ถ้าใส่ token มา ต้องแนบ Bearer Token ใน Authorization header ถูกต้อง', () => {
-      const headers = buildGitHubHeaders('ghp_myfaketoken12345');
-      expect(headers['User-Agent']).toBe('GitFlow-Visualizer');
-      expect(headers['Authorization']).toBe('Bearer ghp_myfaketoken12345');
-    });
-
-    it('ถ้า token มีเว้นวรรคหัวท้าย ต้องตัด trim ให้อัตโนมัติ', () => {
-      const headers = buildGitHubHeaders('  ghp_myfaketoken12345  ');
-      expect(headers['Authorization']).toBe('Bearer ghp_myfaketoken12345');
+    expect(parseGitHubUrl('https://github.com/owner/repo.git')).toEqual({
+      owner: 'owner',
+      repo: 'repo',
+      branch: undefined,
     });
   });
 
-  describe('buildGitHubRawUrl (ดึงโค้ดจริงสำหรับ Side Inspector)', () => {
-    it('สร้าง URL ดึง raw code จาก GitHub ได้ถูกต้อง', () => {
-      const url = buildGitHubRawUrl('chsnor', 'testauth', 'src/app/page.tsx', 'main');
-      expect(url).toBe('https://raw.githubusercontent.com/chsnor/testauth/main/src/app/page.tsx');
-    });
-
-    it('ใช้ branch เริ่มต้นเป็น main หากไม่ระบุ branch', () => {
-      const url = buildGitHubRawUrl('chsnor', 'testauth', 'src/actions/auth.ts');
-      expect(url).toBe('https://raw.githubusercontent.com/chsnor/testauth/main/src/actions/auth.ts');
-    });
-
-    it('ป้องกันบั๊กสลับตำแหน่งระหว่าง filePath และ branch', () => {
-      const url = buildGitHubRawUrl('chsnor', 'testauth', 'main', 'src/app/page.tsx');
-      expect(url).toBe('https://raw.githubusercontent.com/chsnor/testauth/main/src/app/page.tsx');
-    });
+  it('อ่านชื่อ branch จาก /tree/<branch> และ /blob/<branch>', () => {
+    expect(parseGitHubUrl('https://github.com/owner/repo/tree/develop')?.branch).toBe('develop');
+    expect(parseGitHubUrl('https://github.com/owner/repo/blob/main/src/a.ts')?.branch).toBe('main');
+    expect(parseGitHubUrl('https://github.com/owner/repo/tree')?.branch).toBeUndefined();
   });
 
-  describe('buildGitHubBlobUrl (เปิดดูไฟล์บนหน้าเว็บ GitHub)', () => {
-    it('สร้าง URL สำหรับเปิดดูไฟล์บน GitHub blob viewer ได้ถูกต้อง', () => {
-      const url = buildGitHubBlobUrl('chsnor', 'nextjs101', 'src/app/page.tsx', 'main');
-      expect(url).toBe('https://github.com/chsnor/nextjs101/blob/main/src/app/page.tsx');
-    });
+  it('ปฏิเสธ hostname ปลอมที่เดิมหลุดได้ด้วย endsWith', () => {
+    expect(parseGitHubUrl('https://evilgithub.com/owner/repo')).toBeNull();
+    expect(parseGitHubUrl('https://github.com.evil.com/owner/repo')).toBeNull();
+    expect(parseGitHubUrl('https://gitlab.com/owner/repo')).toBeNull();
+  });
+
+  it('รับ www.github.com และปฏิเสธค่าที่ไม่ครบหรือผิดรูปแบบ', () => {
+    expect(parseGitHubUrl('https://www.github.com/owner/repo')?.owner).toBe('owner');
+    expect(parseGitHubUrl('https://github.com')).toBeNull();
+    expect(parseGitHubUrl('https://github.com/owner')).toBeNull();
+    expect(parseGitHubUrl('')).toBeNull();
+    expect(parseGitHubUrl('not a url')).toBeNull();
+  });
+});
+
+describe('buildGitHubApiUrl / buildGitHubHeaders', () => {
+  it('สร้าง endpoint ดึง tree พร้อม branch', () => {
+    expect(buildGitHubApiUrl('o', 'r')).toBe('https://api.github.com/repos/o/r/git/trees/main?recursive=1');
+    expect(buildGitHubApiUrl('o', 'r', 'master')).toContain('/trees/master?recursive=1');
+  });
+
+  it('ใส่ Authorization เฉพาะเมื่อมี token ที่ใช้งานได้', () => {
+    expect(buildGitHubHeaders()).toEqual({ 'User-Agent': 'GitFlow-Visualizer' });
+    expect(buildGitHubHeaders('   ')).not.toHaveProperty('Authorization');
+    expect(buildGitHubHeaders(' ghp_abc ').Authorization).toBe('Bearer ghp_abc');
+  });
+});
+
+describe('buildGitHubRawUrl / buildGitHubBlobUrl', () => {
+  it('สร้าง raw url ตามพาธและ branch', () => {
+    expect(buildGitHubRawUrl('o', 'r', 'src/app/page.tsx', 'master')).toBe(
+      'https://raw.githubusercontent.com/o/r/master/src/app/page.tsx',
+    );
+  });
+
+  it('สลับ argument ได้เมื่อผู้เรียบเรียงส่งสลับกัน', () => {
+    expect(buildGitHubRawUrl('o', 'r', 'develop', 'src/app/page.tsx')).toBe(
+      'https://raw.githubusercontent.com/o/r/develop/src/app/page.tsx',
+    );
+  });
+
+  it('สร้าง blob url และตัด slash ซ้ำซ้อนด้านหน้า', () => {
+    expect(buildGitHubBlobUrl('o', 'r', '/src/a.ts', 'main')).toBe(
+      'https://github.com/o/r/blob/main/src/a.ts',
+    );
   });
 });
 `;
 
-const RAW_TEST2 = `// src/tests/2_parser.test.ts
-import { describe, it, expect } from 'vitest';
-import { filterTreeFiles, detectNextFileType, extractImportsFromCode, extractActionTriggers } from '../lib/parser';
-import { GitHubTreeItem } from '../types';
+const RAW_TEST2 = `import { describe, it, expect } from "vitest";
+import {
+  filterTreeFiles,
+  detectNextFileType,
+  extractImportsFromCode,
+  extractActionTriggers,
+} from "./parser";
+import type { GitHubTreeItem } from "../types";
 
-describe('คนที่ 2: parser.ts (AST & Event Parser Engine)', () => {
-  describe('filterTreeFiles', () => {
-    it('กรองพวก node_modules, lockfile, รูปภาพ, config ทิ้ง เอาเฉพาะไฟล์โค้ด', () => {
-      const items: GitHubTreeItem[] = [
-        { path: 'node_modules/@types/react/index.d.ts', mode: '100644', type: 'blob', sha: '1' },
-        { path: '.next/server/pages/index.js', mode: '100644', type: 'blob', sha: '2' },
-        { path: 'dist/bundle.js', mode: '100644', type: 'blob', sha: '3' },
-        { path: 'build/index.html', mode: '100644', type: 'blob', sha: '4' },
-        { path: 'public/images/logo.png', mode: '100644', type: 'blob', sha: '5' },
-        { path: 'package-lock.json', mode: '100644', type: 'blob', sha: '6' },
-        { path: 'pnpm-lock.yaml', mode: '100644', type: 'blob', sha: '7' },
-        { path: '.env.local', mode: '100644', type: 'blob', sha: '8' },
-        { path: '.gitignore', mode: '100644', type: 'blob', sha: '9' },
-        { path: 'tsconfig.json', mode: '100644', type: 'blob', sha: '10' },
-        { path: 'src/app/page.tsx', mode: '100644', type: 'blob', sha: '11' },
-        { path: 'src/components/Button.tsx', mode: '100644', type: 'blob', sha: '12' },
-        { path: 'src/lib/auth.ts', mode: '100644', type: 'blob', sha: '13' },
-      ];
+const blob = (path: string): GitHubTreeItem => ({
+  path,
+  mode: "100644",
+  type: "blob",
+  sha: "x",
+});
 
-      const filtered = filterTreeFiles(items);
-      const paths = filtered.map(i => i.path);
-
-      expect(paths).toEqual([
-        'src/app/page.tsx',
-        'src/components/Button.tsx',
-        'src/lib/auth.ts'
-      ]);
-    });
-
-    it('ไม่เอาโฟลเดอร์มาคิด เอาเฉพาะไฟล์ที่เป็น blob', () => {
-      const items: GitHubTreeItem[] = [
-        { path: 'src', mode: '040000', type: 'tree', sha: '100' },
-        { path: 'src/app', mode: '040000', type: 'tree', sha: '101' },
-        { path: 'src/app/page.tsx', mode: '100644', type: 'blob', sha: '102' }
-      ];
-
-      const filtered = filterTreeFiles(items);
-      expect(filtered).toHaveLength(1);
-      expect(filtered[0].path).toBe('src/app/page.tsx');
-    });
-
-    it('ถ้ามีไฟล์โค้ดมากกว่า maxLimit ให้ตัดทอนเฉพาะ maxLimit ไฟล์แรกเพื่อความปลอดภัย', () => {
-      const items: GitHubTreeItem[] = Array.from({ length: 30 }, (_, i) => ({
-        path: \`src/components/Card\${i}.tsx\`,
-        mode: '100644',
-        type: 'blob',
-        sha: \`sha-\${i}\`
-      }));
-
-      const filtered = filterTreeFiles(items, 10);
-      expect(filtered).toHaveLength(10);
-      expect(filtered[0].path).toBe('src/components/Card0.tsx');
-      expect(filtered[9].path).toBe('src/components/Card9.tsx');
-    });
+describe("detectNextFileType: ข้อบังคับของ Next.js (เชื่อถือได้เสมอ)", () => {
+  it("จำแนกไฟล์พิเศษของ App Router", () => {
+    expect(detectNextFileType("src/app/about/page.tsx")).toBe("page");
+    expect(detectNextFileType("src/app/(marketing)/page.tsx")).toBe("page");
+    expect(detectNextFileType("src/app/layout.tsx")).toBe("layout");
+    expect(detectNextFileType("src/app/api/route.ts")).toBe("api");
   });
 
-  describe('detectNextFileType (จำแนกเลเยอร์สถาปัตยกรรม Next.js)', () => {
-    it('ตรวจจับหน้าจอ page.tsx เป็น page', () => {
-      expect(detectNextFileType('src/app/dashboard/page.tsx')).toBe('page');
-    });
-
-    it('ตรวจจับ layout.tsx เป็น layout', () => {
-      expect(detectNextFileType('src/app/(auth)/layout.tsx')).toBe('layout');
-    });
-
-    it('ตรวจจับ middleware.ts หรือ proxy.ts เป็น middleware', () => {
-      expect(detectNextFileType('src/middleware.ts')).toBe('middleware');
-      expect(detectNextFileType('src/proxy.ts')).toBe('middleware');
-    });
-
-    it('ตรวจจับ Server Action เช่น actions.ts หรือ โฟลเดอร์ actions/ เป็น action', () => {
-      expect(detectNextFileType('src/app/products/actions.ts')).toBe('action');
-      expect(detectNextFileType('src/actions/user.ts')).toBe('action');
-    });
-
-    it('ตรวจจับ data store หรือ context เป็น store', () => {
-      expect(detectNextFileType('src/stores/cartStore.ts')).toBe('store');
-      expect(detectNextFileType('src/context/AuthContext.tsx')).toBe('store');
-    });
-
-    it('ตรวจจับ API Route เป็น api', () => {
-      expect(detectNextFileType('src/app/api/auth/route.ts')).toBe('api');
-    });
-
-    it('ตรวจจับ components เป็น component', () => {
-      expect(detectNextFileType('src/components/Header.tsx')).toBe('component');
-    });
-
-    it('ตรวจจับโปรเจกต์ที่ไม่มีโฟลเดอร์ src/ นำหน้าได้ (Root Folder)', () => {
-      expect(detectNextFileType('app/page.tsx')).toBe('page');
-      expect(detectNextFileType('app/dashboard/layout.tsx')).toBe('layout');
-      expect(detectNextFileType('components/Modal.tsx')).toBe('component');
-      expect(detectNextFileType('app/api/user/route.ts')).toBe('api');
-    });
+  it("จำแนก middleware ที่ระดับ root และใน src", () => {
+    expect(detectNextFileType("middleware.ts")).toBe("middleware");
+    expect(detectNextFileType("src/middleware.ts")).toBe("middleware");
   });
 
-  describe('extractImportsFromCode', () => {
-    it('แกะ import บรรทัดเดียวปกติได้', () => {
-      const code = \`import { Navbar } from '@/components/Navbar';\`;
-      const res = extractImportsFromCode('src/app/page.tsx', code);
-      expect(res).toEqual([{ source: 'src/app/page.tsx', target: '@/components/Navbar', type: 'import' }]);
-    });
+  it("จำแนก Pages Router (legacy)", () => {
+    expect(detectNextFileType("pages/index.tsx")).toBe("page");
+    expect(detectNextFileType("pages/about.tsx")).toBe("page");
+    expect(detectNextFileType("pages/blog/[slug].tsx")).toBe("page");
+    expect(detectNextFileType("pages/api/users.ts")).toBe("api");
+  });
+});
 
-    it('แกะ import หลายบรรทัดที่มีการเคาะขึ้นบรรทัดใหม่ได้', () => {
-      const code = \`
-        import {
-          Button,
-          Modal,
-          Card
-        } from '@/components/ui';
-      \`;
-      const res = extractImportsFromCode('src/app/page.tsx', code);
-      expect(res).toEqual([{ source: 'src/app/page.tsx', target: '@/components/ui', type: 'import' }]);
-    });
-
-    it('แกะ type import ของ typescript ได้', () => {
-      const code = \`import type { UserSession } from '../types/session';\`;
-      const res = extractImportsFromCode('src/lib/auth.ts', code);
-      expect(res).toEqual([{ source: 'src/lib/auth.ts', target: '../types/session', type: 'import' }]);
-    });
-
-    it('ไม่ไปแกะบรรทัดที่คอมเมนต์ทิ้งไว้', () => {
-      const code = \`
-        // import { OldComp } from '@/components/OldComp';
-        import { NewComp } from '@/components/NewComp';
-      \`;
-      const res = extractImportsFromCode('src/app/page.tsx', code);
-      expect(res).toEqual([{ source: 'src/app/page.tsx', target: '@/components/NewComp', type: 'import' }]);
-    });
-
-    it('ตัดตัวซ้ำถ้าในไฟล์เดียวกัน import ซ้ำที่เดิม', () => {
-      const code = \`
-        import { A } from './utils';
-        import { B } from './utils';
-      \`;
-      const res = extractImportsFromCode('src/app/page.tsx', code);
-      expect(res).toHaveLength(1);
-      expect(res[0].target).toBe('./utils');
-    });
+describe("detectNextFileType: รองรับเอกพจน์/พหูพจน์ (บั๊กเดิมรองรับแค่พหูพจน์)", () => {
+  it("จำแนก store ทั้ง store/ และ stores/", () => {
+    expect(detectNextFileType("src/store/gameStore.ts")).toBe("store");
+    expect(detectNextFileType("src/stores/gameStore.ts")).toBe("store");
+    expect(detectNextFileType("src/state/cart.ts")).toBe("store");
+    expect(detectNextFileType("src/context/Theme.tsx")).toBe("store");
+    expect(detectNextFileType("src/contexts/Theme.tsx")).toBe("store");
   });
 
-  describe('extractActionTriggers (ตรวจจับ Event และ Server Action)', () => {
-    it('ตรวจจับ onClick event และดึงชื่อฟังก์ชันเป้าหมายได้', () => {
-      const code = \`
-        <button onClick={handleDeleteProduct}>Delete</button>
-      \`;
-      const relations = extractActionTriggers('src/components/ProductCard.tsx', code);
-      expect(relations).toContainEqual({
-        source: 'src/components/ProductCard.tsx',
-        target: 'handleDeleteProduct',
-        type: 'event',
-        label: 'onClick'
-      });
-    });
+  it("จำแนก component ทั้ง component/ และ components/", () => {
+    expect(detectNextFileType("src/components/Foo.tsx")).toBe("component");
+    expect(detectNextFileType("src/component/Foo.tsx")).toBe("component");
+  });
 
-    it('ตรวจจับ form action สำหรับ Next.js Server Action ได้', () => {
-      const code = \`
-        <form action={updateProductAction}>
-          <input name="name" />
-          <button type="submit">Save</button>
-        </form>
-      \`;
-      const relations = extractActionTriggers('src/app/products/page.tsx', code);
-      expect(relations).toContainEqual({
-        source: 'src/app/products/page.tsx',
-        target: 'updateProductAction',
-        type: 'action',
-        label: 'form action'
-      });
-    });
+  it("จำแนก action ทั้ง action/ และ actions/", () => {
+    expect(detectNextFileType("src/actions/doThing.ts")).toBe("action");
+    expect(detectNextFileType("src/action/doThing.ts")).toBe("action");
+    expect(detectNextFileType("src/app/products/actions.ts")).toBe("action");
+  });
+});
+
+describe("detectNextFileType: ชื่อโฟลเดอร์ที่พบจริงในโปรเจกต์ Next.js", () => {
+  it("รองรับ ui/, widgets/, views/ เป็น component", () => {
+    expect(detectNextFileType("src/ui/Button.tsx")).toBe("component");
+    expect(detectNextFileType("src/widgets/Header/Header.tsx")).toBe(
+      "component",
+    );
+    expect(detectNextFileType("src/views/Home.tsx")).toBe("component");
+    expect(detectNextFileType("packages/ui/src/Button.tsx")).toBe("component");
+  });
+
+  it("รองรับ private folder _components ของ Next.js", () => {
+    expect(detectNextFileType("app/blog/_components/Post.tsx")).toBe(
+      "component",
+    );
+  });
+
+  it("รองรับโฟลเดอร์ hooks/ และไฟล์ use hook", () => {
+    expect(detectNextFileType("src/hooks/useAuth.ts")).toBe("hook");
+    expect(detectNextFileType("src/lib/useAuth.ts")).toBe("hook");
+    expect(detectNextFileType("src/useGameStore.ts")).toBe("store");
+  });
+
+  it("ไม่นับ user.ts / restore.ts ผิดเป็น hook หรือ store", () => {
+    expect(detectNextFileType("src/lib/user.ts")).toBe("other");
+    expect(detectNextFileType("src/lib/restore.ts")).toBe("other");
+    expect(detectNextFileType("src/lib/restoreState.ts")).toBe("other");
+  });
+
+  it("รองรับ store ที่เป็นไฟล์ ไม่ใช่โฟลเดอร์", () => {
+    expect(detectNextFileType("src/store.ts")).toBe("store");
+    expect(detectNextFileType("src/lib/gameStore.ts")).toBe("store");
+    expect(detectNextFileType("src/lib/ZustandStore.ts")).toBe("store");
+    expect(detectNextFileType("src/lib/auth-store.ts")).toBe("store");
+    expect(detectNextFileType("src/features/cart/model/store.ts")).toBe(
+      "store",
+    );
+  });
+
+  it("โปรเจ็คที่ไม่ตาม convention เลยจะตกเป็น other", () => {
+    expect(detectNextFileType("lib/application.js")).toBe("other");
+    expect(detectNextFileType("src/services/auth.ts")).toBe("other");
+    expect(detectNextFileType("src/App.tsx")).toBe("other");
+  });
+
+  it("รับค่าที่ไม่ใช่นามสกุลที่รองรับหรือค่าผิดปกติได้", () => {
+    expect(detectNextFileType("")).toBe("other");
+    expect(detectNextFileType("src/styles/globals.css")).toBe("other");
+  });
+});
+
+describe("filterTreeFiles", () => {
+  it("ตัดไฟล์ติดตั้ง config lock และไฟล์ทดสอบออก", () => {
+    const result = filterTreeFiles([
+      blob("src/app/page.tsx"),
+      blob("node_modules/react/index.js"),
+      blob("package-lock.json"),
+      blob("next.config.ts"),
+      blob("src/lib/parser.test.ts"),
+      blob("src/types/index.d.ts"),
+      blob(".gitignore"),
+    ]);
+    expect(result.map((f) => f.path)).toEqual(["src/app/page.tsx"]);
+  });
+
+  it("อนุญาต root file เฉพาะ middleware/proxy", () => {
+    const result = filterTreeFiles([blob("middleware.ts"), blob("random.ts")]);
+    expect(result.map((f) => f.path)).toEqual(["middleware.ts"]);
+  });
+
+  it("ไม่เกิน maxLimit และทน input ผิดรูปแบบ", () => {
+    const many = Array.from({ length: 10 }, (_, i) => blob(\`src/lib/f\${i}.ts\`));
+    expect(filterTreeFiles(many, 3)).toHaveLength(3);
+    expect(
+      filterTreeFiles([{ path: "x.ts", type: "tree", mode: "", sha: "" }]),
+    ).toEqual([]);
+    expect(
+      filterTreeFiles("not-an-array" as unknown as GitHubTreeItem[]),
+    ).toEqual([]);
+  });
+});
+
+describe("extractImportsFromCode", () => {
+  it("เก็บเฉพาะ import ที่อ้างถึงไฟล์ในโปรเจ็ค", () => {
+    const code = [
+      "import { a } from './local';",
+      "import type { B } from '@/types';",
+      "import React from 'react';",
+      "import fs from 'node:fs';",
+    ].join("\\n");
+    const relations = extractImportsFromCode("src/x.ts", code);
+    expect(relations.map((r) => r.target)).toEqual(["./local", "@/types"]);
+    expect(relations.every((r) => r.type === "import")).toBe(true);
+  });
+
+  it("ไม่ซ้ำเป้าหมายเดิม และคืน [] เมื่อไม่มี import", () => {
+    const code = "import a from './x';\\nimport b from './x';";
+    expect(extractImportsFromCode("src/x.ts", code)).toHaveLength(1);
+    expect(extractImportsFromCode("src/x.ts", "const a = 1;")).toEqual([]);
+    expect(extractImportsFromCode("src/x.ts", "")).toEqual([]);
+  });
+});
+
+describe("extractActionTriggers", () => {
+  it("สกัด onClick event และ form action", () => {
+    const code = [
+      "export function X() {",
+      "  return (",
+      "    <form action={submitOrder}>",
+      "      <button onClick={handleClick}>go</button>",
+      "    </form>",
+      "  );",
+      "}",
+    ].join("\\n");
+    const relations = extractActionTriggers("src/components/X.tsx", code);
+    expect(relations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          target: "handleClick",
+          type: "event",
+          label: "onClick",
+        }),
+        expect.objectContaining({
+          target: "submitOrder",
+          type: "action",
+          label: "form action",
+        }),
+      ]),
+    );
+  });
+
+  it("ไม่คืนผลเมื่อไม่มี event หรือ action", () => {
+    expect(extractActionTriggers("src/x.ts", "const a = 1;")).toEqual([]);
   });
 });
 `;
 
-const RAW_TEST3 = `// src/tests/3_generator.test.ts
-import { describe, it, expect } from 'vitest';
-import { sanitizeNodeId, getNodeColorConfig, buildFlowElements, generateMermaidSyntax } from '../lib/generator';
-import { CodeRelation, NextFileType } from '../types';
+const RAW_TEST3 = `import { describe, it, expect } from "vitest";
+import {
+  sanitizeNodeId,
+  getNodeColorConfig,
+  buildFlowElements,
+  generateMermaidSyntax,
+} from "../lib/generator";
 
-describe('คนที่ 3: generator.ts (Interactive Flow Visualizer)', () => {
-  describe('sanitizeNodeId', () => {
-    it('เปลี่ยนพวก slash จุด ขีดกลาง @ ให้เป็น underscore ทั้งหมด', () => {
-      expect(sanitizeNodeId('@/components/ui/nav-bar.tsx')).toBe('components_ui_nav_bar_tsx');
-    });
-
-    it('ตัดพวกวงเล็บ route group ของ next เช่น (auth) ทิ้งไป', () => {
-      expect(sanitizeNodeId('src/app/(auth)/login/page.tsx')).toBe('src_app_auth_login_page_tsx');
-    });
-
-    it('ตัด underscore หัวท้ายที่เกินมาออก', () => {
-      expect(sanitizeNodeId('///src/app/page.tsx///')).toBe('src_app_page_tsx');
-    });
+describe("sanitizeNodeId", () => {
+  it("แปลงพาธเป็น id ที่ใช้อักขระปลอดภัย", () => {
+    expect(sanitizeNodeId("src/app/page.tsx")).toBe("src_app_page_tsx");
+    expect(sanitizeNodeId("src/app/[slug]/page.tsx")).toBe(
+      "src_app_slug_page_tsx",
+    );
+    expect(sanitizeNodeId("src/app/(marketing)/page.tsx")).toBe(
+      "src_app_marketing_page_tsx",
+    );
   });
 
-  describe('getNodeColorConfig (ชุดสีแยกตามบทบาทไฟล์ใน Next.js)', () => {
-    it('middleware และ proxy ต้องได้สีม่วง (#a855f7)', () => {
-      const config = getNodeColorConfig('middleware');
-      expect(config.border).toBe('#a855f7');
-    });
+  it("ไม่คืนค่าว่าง", () => {
+    expect(sanitizeNodeId("")).toBe("node");
+    expect(sanitizeNodeId("///")).toBe("node");
+  });
+});
 
-    it('หน้าเพจ page ต้องได้สีฟ้า (#38bdf8)', () => {
-      const config = getNodeColorConfig('page');
-      expect(config.border).toBe('#38bdf8');
-    });
+describe("getNodeColorConfig", () => {
+  it("คืนสีตามประเภทไฟล์ และ fallback เป็น other เมื่อไม่รู้จัก", () => {
+    expect(getNodeColorConfig("page").border).toBe("#38bdf8");
+    expect(getNodeColorConfig("hook").border).toBe("#818cf8");
+    expect(getNodeColorConfig("unknown-type" as never)).toEqual(
+      getNodeColorConfig("other"),
+    );
+  });
+});
 
-    it('server action ต้องได้สีส้ม (#fb923c)', () => {
-      const config = getNodeColorConfig('action');
-      expect(config.border).toBe('#fb923c');
-    });
+describe("buildFlowElements", () => {
+  it("สร้างโหนดหนึ่งต่อหนึ่งไฟล์ และเชื่อม edge ตามพาธจริง", () => {
+    const files = [
+      { path: "src/app/page.tsx", fileType: "page" as const },
+      { path: "src/components/Foo.tsx", fileType: "component" as const },
+    ];
+    const { nodes, edges } = buildFlowElements(files, [
+      {
+        source: "src/app/page.tsx",
+        target: "src/components/Foo.tsx",
+        label: "uses component",
+      },
+    ]);
 
-    it('data store หรือ context ต้องได้สีเขียว (#4ade80)', () => {
-      const config = getNodeColorConfig('store');
-      expect(config.border).toBe('#4ade80');
-    });
+    expect(nodes).toHaveLength(2);
+    expect(edges).toHaveLength(1);
+    expect(edges[0].source).toBe("src_app_page_tsx");
+    expect(edges[0].target).toBe("src_components_Foo_tsx");
+    expect(edges[0].label).toBe("uses component");
   });
 
-  describe('buildFlowElements (สร้างโหนดและเส้นเชื่อมสำหรับ React Flow)', () => {
-    it('แปลงรายการไฟล์และ relations เป็น Nodes และ Edges พร้อมพิกัด position ได้', () => {
-      const mockFiles: Array<{ path: string; fileType: NextFileType }> = [
-        { path: 'src/app/page.tsx', fileType: 'page' },
-        { path: 'src/actions/auth.ts', fileType: 'action' }
-      ];
-      const mockRelations: CodeRelation[] = [
-        {
-          source: 'src/app/page.tsx',
-          target: 'src/actions/auth.ts',
-          type: 'action',
-          label: 'form action'
-        }
-      ];
+  it("ไม่ทิ้งโหนดเมื่อพาธต่างกันแต่ sanitize ได้ id เดียวกัน (บั๊กเดิม)", () => {
+    const files = [
+      { path: "a/b.ts", fileType: "other" as const },
+      { path: "a-b.ts", fileType: "other" as const },
+    ];
+    const { nodes, edges } = buildFlowElements(files, [
+      { source: "a/b.ts", target: "a-b.ts", label: "imports" },
+    ]);
 
-      const elements = buildFlowElements(mockFiles, mockRelations);
-      expect(elements.nodes).toHaveLength(2);
-      expect(elements.edges).toHaveLength(1);
-
-      expect(elements.nodes[0].id).toBe('src_app_page_tsx');
-      expect(elements.nodes[0].position).toHaveProperty('x');
-      expect(elements.nodes[0].position).toHaveProperty('y');
-
-      expect(elements.edges[0].source).toBe('src_app_page_tsx');
-      expect(elements.edges[0].target).toBe('src_actions_auth_ts');
-      expect(elements.edges[0].label).toBe('form action');
-      expect(elements.edges[0].animated).toBe(true);
-    });
+    expect(nodes).toHaveLength(2);
+    expect(new Set(nodes.map((n) => n.id)).size).toBe(2);
+    // edge ต้องชี้ไปที่ id จริงของโหนดทั้งสอง ไม่ใช่ id ที่ชนกัน
+    expect(edges[0].source).toBe("a_b_ts");
+    expect(edges[0].target).toBe("a_b_ts_2");
+    expect(nodes.map((n) => n.id)).toContain(edges[0].target);
   });
 
-  describe('generateMermaidSyntax', () => {
-    it('ต่อสตริง graph TD พร้อมใส่ label ชื่อไฟล์ได้ถูกต้อง', () => {
-      const relations: CodeRelation[] = [
-        { source: 'src/app/page.tsx', target: '@/components/Navbar.tsx' }
-      ];
-      const output = generateMermaidSyntax(relations);
+  it("คำนวณพิกัดโหนดและไม่ใส่ edge ซ้ำ", () => {
+    const files = [{ path: "src/a.ts", fileType: "other" as const }];
+    const { nodes, edges } = buildFlowElements(files, [
+      { source: "src/a.ts", target: "src/b.ts", label: "imports" },
+      { source: "src/a.ts", target: "src/b.ts", label: "imports" },
+    ]);
+    expect(edges).toHaveLength(1);
+    expect(Number.isFinite(nodes[0].position.x)).toBe(true);
+    expect(Number.isFinite(nodes[0].position.y)).toBe(true);
+  });
 
-      expect(output).toContain('graph TD');
-      expect(output).toContain('src_app_page_tsx["src/app/page.tsx"] --> components_Navbar_tsx["@/components/Navbar.tsx"]');
-    });
+  it("ไม่ crash เมื่อไม่มีไฟล์หรือ relation", () => {
+    expect(buildFlowElements([], [])).toEqual({ nodes: [], edges: [] });
+  });
+});
 
-    it('ถ้าไม่มี relation เลย ให้ส่งโหนดเริ่มต้นกลับไป จะได้ไม่ error', () => {
-      const output = generateMermaidSyntax([]);
-      expect(output).toBe('graph TD\\n  Empty["No local relations found"]');
-    });
+describe("generateMermaidSyntax", () => {
+  it("คืนผังว่างเมื่อไม่มี relation", () => {
+    expect(generateMermaidSyntax([])).toBe(
+      'graph TD\\n  Empty["No local relations found"]',
+    );
+  });
+
+  it("สร้างผัง graph TD พร้อมป้ายกำกับ", () => {
+    const mermaid = generateMermaidSyntax([
+      { source: "src/a.ts", target: "src/b.ts", label: "imports" },
+    ]);
+    expect(mermaid).toContain("graph TD");
+    expect(mermaid).toContain('src_a_ts["src/a.ts"]');
+    expect(mermaid).toContain('-->|"imports"|');
   });
 });
 `;
 
-const RAW_TEST4 = `// src/tests/4_frontend_ui.test.ts
-import { describe, it, expect } from 'vitest';
+const RAW_TEST4 = `import { describe, it, expect } from 'vitest';
 import {
   validateUrlInput,
   formatRepoStats,
   calculateHealthScore,
   encodeShareableState,
-  decodeShareableState
-} from '../lib/ui-helper';
+  decodeShareableState,
+} from './ui-helper';
 
-describe('คนที่ 4: ui-helper.ts (Dashboard & State Orchestrator)', () => {
-  describe('validateUrlInput', () => {
-    it('ถ้าไม่พิมพ์อะไรเลย หรือเคาะ space มา ให้แจ้งเตือนว่ากรุณากรอก URL', () => {
-      expect(validateUrlInput('')).toEqual({ isValid: false, errorMessage: 'กรุณากรอก GitHub URL' });
-      expect(validateUrlInput('   ')).toEqual({ isValid: false, errorMessage: 'กรุณากรอก GitHub URL' });
+describe('validateUrlInput', () => {
+  it('ผ่านเมื่อเป็น github.com ที่มี owner/repo ครบ', () => {
+    expect(validateUrlInput('https://github.com/chsnor/nextjs101')).toEqual({
+      isValid: true,
+      errorMessage: null,
     });
-
-    it('ถ้าไม่ใช่ github ให้เตือนว่าต้องมาจาก github เท่านั้น', () => {
-      expect(validateUrlInput('https://gitlab.com/repo')).toEqual({
-        isValid: false,
-        errorMessage: 'URL ต้องมาจาก github.com เท่านั้น'
-      });
-    });
-
-    it('ดักจับแท็ก script แปลกๆ ในช่องกรอกได้', () => {
-      const check = validateUrlInput('<script>alert("hacked")</script>');
-      expect(check.isValid).toBe(false);
-      expect(check.errorMessage).toBe('URL ต้องมาจาก github.com เท่านั้น');
-    });
-
-    it('ถ้ามี space หน้าหลัง ให้ trim ออกให้อัตโนมัติแล้วผ่านได้', () => {
-      const check = validateUrlInput('   https://github.com/chsnor/testauth   ');
-      expect(check.isValid).toBe(true);
-      expect(check.errorMessage).toBeNull();
-    });
+    expect(validateUrlInput('github.com/owner/repo').isValid).toBe(true);
+    expect(validateUrlInput('https://www.github.com/owner/repo').isValid).toBe(true);
   });
 
-  describe('formatRepoStats', () => {
-    it('คำนวณจำนวนไฟล์ที่กรองทิ้ง และจัดข้อความสรุปได้ถูกต้อง', () => {
-      const stats = formatRepoStats(100, 20);
-      expect(stats.rawCount).toBe(100);
-      expect(stats.analyzedCount).toBe(20);
-      expect(stats.ignoredCount).toBe(80);
-      expect(stats.summaryText).toContain('วิเคราะห์โค้ดทั้งหมด 20 ไฟล์');
-    });
-
-    it('ถ้าไม่มีไฟล์เลย ต้องไม่บั๊ก ไม่เออเร่อเป็น NaN หรือติดลบ', () => {
-      const stats = formatRepoStats(0, 0);
-      expect(stats.rawCount).toBe(0);
-      expect(stats.analyzedCount).toBe(0);
-      expect(stats.ignoredCount).toBe(0);
-      expect(stats.summaryText).toContain('0 ไฟล์');
-    });
-
-    it('ถ้าไฟล์ที่วิเคราะห์มีมากกว่าไฟล์ดิบ ตัวเลขที่ตัดทิ้งต้องเป็น 0 เสมอ ไม่ติดลบ', () => {
-      const stats = formatRepoStats(10, 15);
-      expect(stats.ignoredCount).toBe(0);
-    });
+  it('ปฏิเสธโดเมนอื่น', () => {
+    const r = validateUrlInput('https://gitlab.com/owner/repo');
+    expect(r.isValid).toBe(false);
+    expect(r.errorMessage).toBe('URL ต้องมาจาก github.com เท่านั้น');
   });
 
-  describe('calculateHealthScore (ประเมินคะแนนสถาปัตยกรรมโค้ด)', () => {
-    it('ถ้า ratio อยู่ระหว่าง 0.8 ถึง 2.5 ต้องได้เกรด A', () => {
-      const score = calculateHealthScore(20, 15); // ratio = 1.33
-      expect(score.grade).toBe('A');
-    });
-
-    it('ถ้า ratio อยู่ระหว่าง 2.5 ถึง 4.0 ต้องได้เกรด B', () => {
-      const score = calculateHealthScore(30, 10); // ratio = 3.0
-      expect(score.grade).toBe('B');
-    });
-
-    it('ถ้า ratio มากกว่า 4.0 หรือน้อยกว่า 0.8 ต้องได้เกรด C', () => {
-      const scoreHigh = calculateHealthScore(50, 10); // ratio = 5.0
-      expect(scoreHigh.grade).toBe('C');
-
-      const scoreLow = calculateHealthScore(5, 10); // ratio = 0.5
-      expect(scoreLow.grade).toBe('C');
-    });
-
-    it('ถ้าไม่มีไฟล์โค้ด (0 ไฟล์) ต้องได้เกรด N/A', () => {
-      const score = calculateHealthScore(0, 0);
-      expect(score.grade).toBe('N/A');
-    });
+  it('ปฏิเสธ URL ที่เพียงแค่มีคำว่า github.com อยู่ข้างใน (บั๊กเดิม)', () => {
+    expect(validateUrlInput('https://evil.com/?x=github.com/owner/repo').isValid).toBe(false);
+    expect(validateUrlInput('https://evilgithub.com/owner/repo').isValid).toBe(false);
   });
 
-  describe('encodeShareableState และ decodeShareableState (ระบบแชร์สถานะไดอะแกรม)', () => {
-    it('เข้ารหัสและถอดรหัส URL State กลับมาได้ถูกต้องครบถ้วน', () => {
-      const originalUrl = 'https://github.com/chsnor/testauth';
-      const activeNode = 'src/app/page.tsx';
-
-      const encoded = encodeShareableState(originalUrl, activeNode);
-      expect(typeof encoded).toBe('string');
-      expect(encoded.length).toBeGreaterThan(0);
-
-      const decoded = decodeShareableState(encoded);
-      expect(decoded).toEqual({
-        url: originalUrl,
-        activeNode: activeNode
-      });
-    });
-
-    it('ถ้าถอดรหัสข้อความที่ผิดรูปแบบ ให้ส่งค่ากลับเป็น null', () => {
-      expect(decodeShareableState('invalid-base64-string!!')).toBeNull();
-    });
+  it('ปฏิเสธ input ว่าง ไม่ครบ owner/repo หรือมีอักขระอันตราย', () => {
+    expect(validateUrlInput('')).toEqual({ isValid: false, errorMessage: 'กรุณากรอก GitHub URL' });
+    expect(validateUrlInput('   ').isValid).toBe(false);
+    expect(validateUrlInput('https://github.com').isValid).toBe(false);
+    expect(validateUrlInput('https://github.com/owner').isValid).toBe(false);
+    expect(validateUrlInput('<script>github.com</script>').isValid).toBe(false);
+    expect(validateUrlInput('javascript:alert(1)').isValid).toBe(false);
   });
 });
-`;
 
-const RAW_TEST5 = `// src/tests/5_side_drawer.test.ts
-import { describe, it, expect } from 'vitest';
-import { getLanguageFromPath, formatCodeSnippet, highlightCodeWithPrism } from '../lib/code-viewer';
-
-describe('คนที่ 5: code-viewer.ts (Side Inspector & PrismJS Code Viewer)', () => {
-  describe('getLanguageFromPath', () => {
-    it('ระบุภาษา tsx สำหรับไฟล์คอมโพเนนต์ React TSX ได้', () => {
-      expect(getLanguageFromPath('src/components/Header.tsx')).toBe('tsx');
-    });
-
-    it('ระบุภาษา typescript สำหรับไฟล์ .ts ทั่วไปได้', () => {
-      expect(getLanguageFromPath('src/lib/auth.ts')).toBe('typescript');
-    });
-
-    it('ระบุภาษา javascript สำหรับไฟล์ .js ได้', () => {
-      expect(getLanguageFromPath('server.js')).toBe('javascript');
-    });
-
-    it('ระบุภาษา json สำหรับไฟล์คอนฟิกได้', () => {
-      expect(getLanguageFromPath('package.json')).toBe('json');
-    });
-
-    it('ถ้าไม่ทราบนามสกุล ให้ fallback เป็น clike หรือ markup', () => {
-      const lang = getLanguageFromPath('Dockerfile');
-      expect(['clike', 'markup', 'text', 'none']).toContain(lang);
+describe('formatRepoStats', () => {
+  it('คำนวณจำนวนไฟล์ที่ละเว้นและข้อความสรุป', () => {
+    const stats = formatRepoStats(100, 31);
+    expect(stats).toEqual({
+      rawCount: 100,
+      analyzedCount: 31,
+      ignoredCount: 69,
+      summaryText: 'วิเคราะห์โค้ดทั้งหมด 31 ไฟล์ จากทั้งหมด 100 ไฟล์ (ละเว้น 69 ไฟล์ คิดเป็น 69%)',
     });
   });
 
-  describe('formatCodeSnippet (การตัดทอนโค้ดไฟล์ใหญ่)', () => {
-    it('นับจำนวนบรรทัดของโค้ดสั้นได้ถูกต้อง และไม่ขึ้นสถานะ isTruncated', () => {
-      const code = "console.log('line 1');\\nconsole.log('line 2');\\nconsole.log('line 3');";
-      const result = formatCodeSnippet(code, 10);
-      expect(result.totalLines).toBe(3);
-      expect(result.isTruncated).toBe(false);
-      expect(result.snippet).toBe(code);
-    });
-
-    it('ถ้าบรรทัดเกิน maxLines ให้ตัดทอนเฉพาะส่วนแรก และขึ้น isTruncated เป็น true', () => {
-      const lines = Array.from({ length: 50 }, (_, i) => \`line \${i + 1}\`).join('\\n');
-      const result = formatCodeSnippet(lines, 20);
-      expect(result.totalLines).toBe(50);
-      expect(result.isTruncated).toBe(true);
-      expect(result.snippet.split('\\n')).toHaveLength(20);
-    });
-  });
-
-  describe('highlightCodeWithPrism (แปลงโค้ดเป็น HTML ที่มีสี)', () => {
-    it('สามารถแปลงโค้ด TypeScript เป็น HTML ที่มีคลาส token ของ Prism ได้', () => {
-      const code = \`const greeting: string = "Hello World";\`;
-      const html = highlightCodeWithPrism(code, 'typescript');
-      expect(html).toContain('token');
-      expect(html).toContain('const');
-    });
-
-    it('ถ้าส่งภาษาที่ไม่รองรับมา ต้องไม่ crash และส่งคืนข้อความที่ escape ปลอดภัย', () => {
-      const code = \`<div>test</div>\`;
-      const html = highlightCodeWithPrism(code, 'unknown_language');
-      expect(typeof html).toBe('string');
-      expect(html).toContain('test');
-    });
+  it('ไม่คืนค่าติดลบหรือ NaN', () => {
+    expect(formatRepoStats(NaN, 5).rawCount).toBe(0);
+    expect(formatRepoStats(10, -1).analyzedCount).toBe(0);
   });
 });
-`;
 
-const RAW_TEST6 = `// src/tests/6_integration_pipeline.test.ts
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { runAnalysisPipeline, clearPipelineCache, pipelineCache } from '../lib/pipeline';
-import { GitHubTreeItem } from '../types';
-
-describe('คนที่ 6: pipeline.ts (Integration Pipeline, QA & Deployment)', () => {
-  beforeEach(() => {
-    clearPipelineCache();
-    vi.restoreAllMocks();
+describe('calculateHealthScore', () => {
+  it('ให้ N/A เมื่อไม่มีไฟล์', () => {
+    expect(calculateHealthScore(0, 0).grade).toBe('N/A');
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
+  it('ให้เกรดตามสัดส่วนเส้นเชื่อมต่อจำนวนไฟล์', () => {
+    expect(calculateHealthScore(10, 10).grade).toBe('A'); // ratio 1.0
+    expect(calculateHealthScore(30, 10).grade).toBe('B'); // ratio 3.0
+    expect(calculateHealthScore(100, 10).grade).toBe('C'); // ratio 10
+    expect(calculateHealthScore(1, 10).grade).toBe('C'); // ratio 0.1 (เชื่อมโยงต่ำไป)
   });
 
-  // ==========================================
-  // ส่วนที่ 1: Unit & Functional Flow Tests
-  // ==========================================
-  it('ทดสอบโฟลว์ครบวงจร: URL -> กรองไฟล์ -> สกัด Action/Event -> สร้าง React Flow Nodes/Edges และ Mermaid', async () => {
-    const inputUrl = 'https://github.com/chsnor/testauth.git';
-
-    const mockTree: GitHubTreeItem[] = [
-      { path: 'node_modules/next/package.json', mode: '100644', type: 'blob', sha: '1' },
-      { path: '.next/types/routes.d.ts', mode: '100644', type: 'blob', sha: '2' },
-      { path: 'src/middleware.ts', mode: '100644', type: 'blob', sha: '3' },
-      { path: 'src/app/products/page.tsx', mode: '100644', type: 'blob', sha: '4' },
-      { path: 'src/app/products/actions.ts', mode: '100644', type: 'blob', sha: '5' },
-      { path: 'src/stores/cartStore.ts', mode: '100644', type: 'blob', sha: '6' },
-      { path: 'public/banner.png', mode: '100644', type: 'blob', sha: '7' }
-    ];
-
-    const mockContents: Record<string, string> = {
-      'src/app/products/page.tsx': \`
-        import { updateProductAction } from './actions';
-        export default function ProductsPage() {
-          return (
-            <form action={updateProductAction}>
-              <button type="submit">Save</button>
-            </form>
-          );
-        }
-      \`
-    };
-
-    const result = await runAnalysisPipeline(inputUrl, undefined, mockTree, mockContents);
-
-    expect(result.owner).toBe('chsnor');
-    expect(result.repoName).toBe('testauth');
-    expect(result.totalFiles).toBe(7);
-    expect(result.filteredFilesCount).toBe(4);
-
-    // ตรวจสอบว่าโหนด React Flow ถูกสร้างขึ้นครบตามประเภทไฟล์
-    const pageNode = result.nodes.find(n => n.path === 'src/app/products/page.tsx');
-    expect(pageNode).toBeDefined();
-    expect(pageNode?.fileType).toBe('page');
-
-    const actionNode = result.nodes.find(n => n.path === 'src/app/products/actions.ts');
-    expect(actionNode).toBeDefined();
-    expect(actionNode?.fileType).toBe('action');
-
-    const middlewareNode = result.nodes.find(n => n.path === 'src/middleware.ts');
-    expect(middlewareNode).toBeDefined();
-    expect(middlewareNode?.fileType).toBe('middleware');
-
-    // ตรวจสอบเส้น Edge ที่เชื่อมโยง Event/Action
-    const actionEdge = result.edges.find(e => e.label === 'form action' || e.animated === true);
-    expect(actionEdge).toBeDefined();
-
-    // ตรวจสอบ Mermaid Syntax ว่ามีข้อมูล
-    expect(result.mermaidSyntax).toContain('graph TD');
+  it('ไม่คืนค่า NaN เมื่อ input ผิดปกติ', () => {
+    expect(calculateHealthScore(NaN, 10).ratio).toBe(0);
   });
+});
 
-  it('ทดสอบระบบ In-Memory Cache: วิเคราะห์ซ้ำ URL เดิมต้องดึงจากแคชทันทีโดยไม่ต้องคำนวณใหม่', async () => {
-    const inputUrl = 'https://github.com/chsnor/testauth';
-    const mockTree: GitHubTreeItem[] = [
-      { path: 'src/app/page.tsx', mode: '100644', type: 'blob', sha: '1' }
-    ];
-
-    // ครั้งแรก: ต้องประมวลผลใหม่ และบันทึกลงแคช (isCached เป็น false)
-    const firstResult = await runAnalysisPipeline(inputUrl, undefined, mockTree);
-    expect(firstResult.isCached).toBe(false);
-    expect(pipelineCache.has(inputUrl)).toBe(true);
-
-    // ครั้งที่สอง: ต้องดึงผลลัพธ์จากแคชทันที (isCached เป็น true)
-    const secondResult = await runAnalysisPipeline(inputUrl, undefined, mockTree);
-    expect(secondResult.isCached).toBe(true);
-    expect(secondResult.repoName).toBe('testauth');
-  });
-
-  it('ทดสอบความเร็วและ Performance Benchmark: ทดสอบกับ 500 ไฟล์ ต้องประมวลผลเสร็จในเสี้ยววินาที', async () => {
-    const startTime = performance.now();
-
-    const largeTree: GitHubTreeItem[] = Array.from({ length: 500 }, (_, i) => ({
-      path: i % 2 === 0 ? \`node_modules/pkg-\${i}/index.js\` : \`src/components/Comp\${i}.tsx\`,
-      mode: '100644',
-      type: 'blob',
-      sha: \`sha-\${i}\`
-    }));
-
-    const result = await runAnalysisPipeline('https://github.com/chsnor/bigrepo', undefined, largeTree);
-    expect(result.filteredFilesCount).toBe(250);
-    expect(result.nodes.length).toBe(250);
-
-    const duration = performance.now() - startTime;
-    expect(duration).toBeLessThan(150);
-  });
-
-  // ==========================================
-  // ส่วนที่ 2: Boundary Value & Negative Tests (Red Team QA)
-  // ==========================================
-  it('BVA: รองรับกรณีคลังไฟล์ว่างเปล่า (Empty Tree 0 ไฟล์) ได้อย่างปลอดภัยโดยไม่ Crash', async () => {
-    const result = await runAnalysisPipeline('https://github.com/chsnor/empty-repo', undefined, []);
-    expect(result.totalFiles).toBe(0);
-    expect(result.filteredFilesCount).toBe(0);
-    expect(result.nodes).toEqual([]);
-    expect(result.edges).toEqual([]);
-    expect(result.mermaidSyntax).toBeDefined();
-  });
-
-  it('Negative: จัดการกรณี URL ไม่ถูกต้องโดย Throw ข้อผิดพลาดที่อ่านเข้าใจง่าย', async () => {
-    await expect(runAnalysisPipeline('https://gitlab.com/invalid/repo')).rejects.toThrow(
-      'URL ต้องมาจาก github.com เท่านั้น'
-    );
-  });
-
-  it('Adversarial: จำลองกรณีติด Rate Limit 403 Forbidden ต้อง Throw ข้อผิดพลาดแจ้งเตือน Token', async () => {
-    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValueOnce({
-      ok: false,
-      status: 403,
-      json: async () => ({ message: 'API rate limit exceeded' })
-    } as Response);
-
-    await expect(runAnalysisPipeline('https://github.com/chsnor/rate-limited-repo')).rejects.toThrow(
-      '❌ GitHub API Rate Limit หรือ Access Denied. กรุณาเพิ่ม GitHub Token ในไฟล์ .env'
-    );
-
-    expect(fetchSpy).toHaveBeenCalled();
-  });
-
-  it('Adversarial: จำลองกรณีระบบ Network ล่ม (Fetch Reject) ต้องโยนข้อผิดพลาดการเชื่อมต่อ', async () => {
-    const fetchSpy = vi.spyOn(global, 'fetch').mockRejectedValueOnce(new Error('Network connection aborted'));
-
-    await expect(runAnalysisPipeline('https://github.com/chsnor/offline-repo')).rejects.toThrow(
-      'ไม่สามารถเชื่อมต่อ GitHub ได้ กรุณาตรวจสอบอินเทอร์เน็ตหรือแนบ Token'
-    );
-
-    expect(fetchSpy).toHaveBeenCalled();
-  });
-
-  it('API Route POST /api/analyze: ถ้าไม่ส่ง URL มาต้องตอบกลับ status 400', async () => {
-    const { POST } = await import('../app/api/analyze/route');
-    const fakeReq = {
-      json: async () => ({})
-    };
-    const res = await POST(fakeReq as unknown as import('next/server').NextRequest);
-    expect(res.status).toBe(400);
-  });
-
-  // ==========================================
-  // ส่วนที่ 3: Integration Tests
-  // ==========================================
-  describe('เฟสที่ 1: Integration Test เชื่อมต่อ Person 1 (GitHub) + Person 6 (Pipeline & API)', () => {
-    it('1. ส่ง URL รูปแบบซับซ้อน (มี .git และ Slash ท้าย) เข้า Pipeline ต้องเชื่อมต่อกับ parseGitHubUrl ของคนที่ 1 ได้ถูกต้อง', async () => {
-      const complexUrl = 'https://github.com/chsnor/real-next-project.git/';
-      const mockTree: GitHubTreeItem[] = [
-        { path: 'src/app/page.tsx', mode: '100644', type: 'blob', sha: '101' },
-        { path: 'src/middleware.ts', mode: '100644', type: 'blob', sha: '102' }
-      ];
-
-      const result = await runAnalysisPipeline(complexUrl, undefined, mockTree);
-
-      expect(result.owner).toBe('chsnor');
-      expect(result.repoName).toBe('real-next-project');
-      expect(result.totalFiles).toBe(2);
-      expect(result.filteredFilesCount).toBe(2);
-    });
-
-    it('2. ตรวจสอบการส่งต่อ Token และการเรียก buildGitHubApiUrl + buildGitHubHeaders ของคนที่ 1 ผ่าน vi.spyOn(fetch)', async () => {
-      const testToken = 'ghp_mockIntegrationSecretToken999';
-
-      const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          tree: [
-            { path: 'src/app/page.tsx', mode: '100644', type: 'blob', sha: '1' }
-          ]
-        })
-      } as Response);
-
-      const result = await runAnalysisPipeline('https://github.com/chsnor/secure-app', testToken);
-
-      expect(fetchSpy).toHaveBeenCalledWith(
-        'https://api.github.com/repos/chsnor/secure-app/git/trees/main?recursive=1',
-        {
-          headers: expect.objectContaining({
-            'User-Agent': 'GitFlow-Visualizer',
-            'Authorization': \`Bearer \${testToken}\`
-          })
-        }
-      );
-
-      expect(result.owner).toBe('chsnor');
-      expect(result.repoName).toBe('secure-app');
-    });
-
-    it('3. Integration เต็มรูปแบบ: API Route POST -> runAnalysisPipeline -> parseGitHubUrl (คน 1) -> ส่งผลลัพธ์ HTTP 200', async () => {
-      const { POST } = await import('../app/api/analyze/route');
-      const mockReq = {
-        json: async () => ({
-          url: 'https://github.com/chsnor/api-integrated-repo'
-        })
-      };
-
-      vi.spyOn(global, 'fetch').mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          tree: [{ path: 'src/app/page.tsx', mode: '100644', type: 'blob', sha: '1' }]
-        })
-      } as Response);
-
-      const response = await POST(mockReq as unknown as import('next/server').NextRequest);
-      expect(response.status).toBe(200);
-
-      const data = await response.json();
-      expect(data.owner).toBe('chsnor');
-      expect(data.repoName).toBe('api-integrated-repo');
-      expect(data.totalFiles).toBe(1);
-    });
-
-    it('4. Fallback master branch: หาก branch main ตอบกลับ 404 ต้องสลับไปดึง master และบันทึก branch ในผลลัพธ์', async () => {
-      vi.spyOn(global, 'fetch')
-        .mockResolvedValueOnce({
-          ok: false,
-          status: 404,
-          json: async () => ({ message: 'Not Found' })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          json: async () => ({
-            tree: [{ path: 'src/app/page.tsx', mode: '100644', type: 'blob', sha: '1' }]
-          })
-        } as Response);
-
-      const result = await runAnalysisPipeline('https://github.com/chsnor/legacy-master-repo');
-      expect(result.branch).toBe('master');
-      expect(result.owner).toBe('chsnor');
-      expect(result.repoName).toBe('legacy-master-repo');
+describe('encode/decodeShareableState', () => {
+  it('ไป-กลับได้ค่าเดิม', () => {
+    const encoded = encodeShareableState('https://github.com/o/r', 'src/a.ts');
+    expect(decodeShareableState(encoded)).toEqual({
+      url: 'https://github.com/o/r',
+      activeNode: 'src/a.ts',
     });
   });
 
-  // ==========================================
-  // ส่วนที่ 4: Future Integration Tests (เตรียมพร้อมสำหรับสมาชิกคนที่ 2 ถึง 5)
-  // ==========================================
-  describe('เฟสที่ 2: Integration Test (คนที่ 2: Parser Engine)', () => {
-    it('1. filterTreeFiles: ต้องคัดกรอง node_modules, .next, .d.ts ออกอย่างถูกต้อง และเคารพ maxLimit', async () => {
-      const { filterTreeFiles } = await import('../lib/parser');
-      const sampleItems: GitHubTreeItem[] = [
-        { path: 'node_modules/react/index.js', mode: '100644', type: 'blob', sha: '1' },
-        { path: '.next/types/routes.d.ts', mode: '100644', type: 'blob', sha: '2' },
-        { path: 'dist/bundle.js', mode: '100644', type: 'blob', sha: '3' },
-        { path: 'public/favicon.ico', mode: '100644', type: 'blob', sha: '4' },
-        { path: 'src/app/page.tsx', mode: '100644', type: 'blob', sha: '5' },
-        { path: 'src/app/actions.ts', mode: '100644', type: 'blob', sha: '6' },
-        { path: 'src/middleware.ts', mode: '100644', type: 'blob', sha: '7' }
-      ];
-
-      const filtered = filterTreeFiles(sampleItems, 150);
-      expect(filtered.length).toBe(3);
-      expect(filtered.map(f => f.path)).toEqual([
-        'src/app/page.tsx',
-        'src/app/actions.ts',
-        'src/middleware.ts'
-      ]);
-    });
-
-    it('2. detectNextFileType: ต้องจำแนก page, action, middleware, store, component ได้ถูกต้องทั้งมีและไม่มี src/', async () => {
-      const { detectNextFileType } = await import('../lib/parser');
-      
-      // กรณีมี src/
-      expect(detectNextFileType('src/app/page.tsx')).toBe('page');
-      expect(detectNextFileType('src/app/products/actions.ts')).toBe('action');
-      expect(detectNextFileType('src/middleware.ts')).toBe('middleware');
-      expect(detectNextFileType('src/stores/authStore.ts')).toBe('store');
-      expect(detectNextFileType('src/components/Header.tsx')).toBe('component');
-
-      // กรณีไม่มี src/ (Root App Router)
-      expect(detectNextFileType('app/dashboard/page.tsx')).toBe('page');
-      expect(detectNextFileType('app/login/actions.ts')).toBe('action');
-      expect(detectNextFileType('middleware.ts')).toBe('middleware');
-    });
-
-    it('3. extractImportsFromCode: ต้องสกัดเฉพาะ Local / Alias Imports และตัดโมดูลภายนอกทิ้ง', async () => {
-      const { extractImportsFromCode } = await import('../lib/parser');
-      const codeSnippet = \`
-        import React, { useState } from 'react';
-        import { updateItem } from './actions';
-        import { useCartStore } from '@/stores/cartStore';
-        // import { oldFeature } from './legacy';
-      \`;
-
-      const relations = extractImportsFromCode('src/app/page.tsx', codeSnippet);
-      const targets = relations.map(r => r.target);
-
-      expect(targets).toContain('./actions');
-      expect(targets).toContain('@/stores/cartStore');
-      expect(targets).not.toContain('react');
-      expect(targets).not.toContain('./legacy');
-    });
-
-    it('4. extractActionTriggers: ต้องตรวจจับ form action และ onClick ส่งต่อเป็น CodeRelation', async () => {
-      const { extractActionTriggers } = await import('../lib/parser');
-      const codeSnippet = \`
-        export default function Page() {
-          return (
-            <form action={handleSubmitAction}>
-              <button onClick={handleReset}>Reset</button>
-            </form>
-          );
-        }
-      \`;
-
-      const relations = extractActionTriggers('src/app/page.tsx', codeSnippet);
-      expect(relations.length).toBeGreaterThanOrEqual(1);
-      
-      const formAction = relations.find(r => r.label === 'form action');
-      expect(formAction).toBeDefined();
+  it('คืน activeNode เป็น undefined เมื่อไม่ได้ส่งมา', () => {
+    const encoded = encodeShareableState('https://github.com/o/r');
+    expect(decodeShareableState(encoded)).toEqual({
+      url: 'https://github.com/o/r',
+      activeNode: undefined,
     });
   });
 
-  describe('เฟสที่ 3: Integration Test (คนที่ 3: Flow & Mermaid Generator)', () => {
-    it('1. sanitizeNodeId: ลบวงเล็บ Next.js Route Groups และแทนที่อักขระพิเศษด้วย Underscore', async () => {
-      const { sanitizeNodeId } = await import('../lib/generator');
-      expect(sanitizeNodeId('src/app/(auth)/login/page.tsx')).toBe('src_app_auth_login_page_tsx');
-      expect(sanitizeNodeId('src/components/Button.tsx')).toBe('src_components_Button_tsx');
-    });
-
-    it('2. getNodeColorConfig: คืนค่าสีตรงตามประเภทไฟล์ Next.js', async () => {
-      const { getNodeColorConfig } = await import('../lib/generator');
-      expect(getNodeColorConfig('page').border).toBe('#38bdf8'); // ฟ้า
-      expect(getNodeColorConfig('action').border).toBe('#fb923c'); // ส้ม
-      expect(getNodeColorConfig('middleware').border).toBe('#a855f7'); // ม่วง
-      expect(getNodeColorConfig('store').border).toBe('#4ade80'); // เขียว
-    });
-
-    it('3. buildFlowElements: คำนวณพิกัด {x, y} ของ Nodes อย่างเป็นระเบียบ และสร้าง Edges พร้อม Animation สำหรับ Action', async () => {
-      const { buildFlowElements } = await import('../lib/generator');
-      const files = [
-        { path: 'src/app/page.tsx', fileType: 'page' as const },
-        { path: 'src/app/actions.ts', fileType: 'action' as const }
-      ];
-      const relations = [
-        { source: 'src/app/page.tsx', target: 'src/app/actions.ts', type: 'action' as const, label: 'form action' }
-      ];
-
-      const elements = buildFlowElements(files, relations);
-      expect(elements.nodes.length).toBe(2);
-      expect(elements.nodes[0].position).toHaveProperty('x');
-      expect(elements.nodes[0].position).toHaveProperty('y');
-      
-      expect(elements.edges.length).toBe(1);
-      expect(elements.edges[0].animated).toBe(true);
-      expect(elements.edges[0].label).toBe('form action');
-    });
-
-    it('4. generateMermaidSyntax: ส่งออกไวยากรณ์ graph TD ที่ถูกต้อง พร้อม Style สีของโหนด', async () => {
-      const { generateMermaidSyntax } = await import('../lib/generator');
-      const relations = [
-        { source: 'src/app/page.tsx', target: 'src/app/actions.ts', type: 'action' as const, label: 'submit' }
-      ];
-
-      const syntax = generateMermaidSyntax(relations);
-      expect(syntax).toContain('graph TD');
-      expect(syntax).toMatch(/-->\\|"?submit"?\\|/);
-    });
-  });
-
-  describe('เฟสที่ 4 และ 5: Contract Test (คนที่ 4: Dashboard UI & คนที่ 5: Side Inspector)', () => {
-    it('ตรวจสอบโครงสร้าง AnalysisResult ว่าส่งต่อฟิลด์ที่ SideDrawer และ FlowCanvas ต้องใช้ครบ 100%', async () => {
-      const mockTree: GitHubTreeItem[] = [
-        { path: 'src/app/page.tsx', mode: '100644', type: 'blob', sha: '1' }
-      ];
-      const result = await runAnalysisPipeline('https://github.com/chsnor/contract-check', undefined, mockTree);
-
-      // ตรวจสอบฟิลด์ที่ Dashboard ของคนที่ 4 ต้องแสดงบนหัวจอ
-      expect(result).toHaveProperty('repoName');
-      expect(result).toHaveProperty('owner');
-      expect(result).toHaveProperty('totalFiles');
-      expect(result).toHaveProperty('filteredFilesCount');
-      expect(result).toHaveProperty('executionTimeMs');
-      expect(result).toHaveProperty('isCached');
-
-      // ตรวจสอบฟิลด์ที่ SideDrawer ของคนที่ 5 ต้องใช้เปิดส่องโค้ด
-      result.nodes.forEach(node => {
-        expect(node).toHaveProperty('id');
-        expect(node).toHaveProperty('path');
-        expect(node).toHaveProperty('fileType');
-      });
-    });
-  });
-
-  // ==========================================
-  // ส่วนที่ 5: System Test / End-to-End User Scenarios (ระบบโดยรวม)
-  // ==========================================
-  describe('ระบบโดยรวม: System Test / End-to-End User Scenarios', () => {
-    it('Scenario 1 (Happy Path E2E): ผู้ใช้งานกรอก URL โปรเจกต์ Next.js จริง -> รับแผนผัง Flow ครบ 100%', async () => {
-      const { POST } = await import('../app/api/analyze/route');
-      const userRequest = {
-        json: async () => ({
-          url: 'https://github.com/chsnor/ecommerce-next'
-        })
-      };
-
-      // จำลองโครงสร้างไฟล์ของโปรเจกต์ Next.js ของจริง
-      vi.spyOn(global, 'fetch').mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          tree: [
-            { path: 'node_modules/react/index.js', mode: '100644', type: 'blob', sha: '1' },
-            { path: 'src/middleware.ts', mode: '100644', type: 'blob', sha: '2' },
-            { path: 'src/app/page.tsx', mode: '100644', type: 'blob', sha: '3' },
-            { path: 'src/app/actions.ts', mode: '100644', type: 'blob', sha: '4' },
-            { path: 'src/stores/cart.ts', mode: '100644', type: 'blob', sha: '5' }
-          ]
-        })
-      } as Response);
-
-      const response = await POST(userRequest as unknown as import('next/server').NextRequest);
-      expect(response.status).toBe(200);
-
-      const result = await response.json();
-      expect(result.owner).toBe('chsnor');
-      expect(result.repoName).toBe('ecommerce-next');
-      expect(result.totalFiles).toBe(5);
-      expect(result.filteredFilesCount).toBe(4);
-      expect(result.nodes.length).toBe(4);
-      expect(result.mermaidSyntax).toContain('graph TD');
-    });
-
-    it('Scenario 2 (Cache Acceleration E2E): ร้องขอซ้ำด้วย URL เดิม ต้องได้ความเร็วระดับ < 10ms', async () => {
-      const testUrl = 'https://github.com/chsnor/fast-cached-app';
-      const mockTree: GitHubTreeItem[] = [
-        { path: 'src/app/page.tsx', mode: '100644', type: 'blob', sha: '1' }
-      ];
-
-      // ยิงครั้งแรก: ประมวลผลและแคช
-      const firstRun = await runAnalysisPipeline(testUrl, undefined, mockTree);
-      expect(firstRun.isCached).toBe(false);
-
-      // ยิงครั้งที่สอง: ดึงแคชใน RAM ทันที
-      const secondRun = await runAnalysisPipeline(testUrl, undefined, mockTree);
-      expect(secondRun.isCached).toBe(true);
-      expect(secondRun.executionTimeMs).toBeLessThan(10);
-      expect(secondRun.nodes).toEqual(firstRun.nodes);
-    });
-
-    it('Scenario 3 (Adversarial Error Boundary E2E): ส่ง URL แปลกปลอมหรือ XSS -> ระบบตัดจบด้วย HTTP 400/500 ปลอดภัย', async () => {
-      const { POST } = await import('../app/api/analyze/route');
-      const maliciousRequest = {
-        json: async () => ({
-          url: 'https://evil-phishing.com/<script>alert(1)</script>'
-        })
-      };
-
-      const response = await POST(maliciousRequest as unknown as import('next/server').NextRequest);
-      expect(response.status).toBeGreaterThanOrEqual(400);
-
-      const body = await response.json();
-      expect(body.error).toBeDefined();
-    });
-
-    it('Scenario 4 (Stress Scalability E2E): คลังขนาดใหญ่ 1,000 ไฟล์ ต้องประมวลผลเสร็จในเวลาน้อยกว่า 500ms', async () => {
-      const massiveTree: GitHubTreeItem[] = Array.from({ length: 1000 }, (_, i) => ({
-        path: i % 2 === 0 ? \`node_modules/pkg-\${i}/index.js\` : \`src/app/page-\${i}.tsx\`,
-        mode: '100644',
-        type: 'blob',
-        sha: \`sha-\${i}\`
-      }));
-
-      const startTime = performance.now();
-      const result = await runAnalysisPipeline('https://github.com/chsnor/massive-repo', undefined, massiveTree);
-      const duration = performance.now() - startTime;
-
-      expect(result.totalFiles).toBe(1000);
-      expect(result.filteredFilesCount).toBe(500);
-      expect(duration).toBeLessThan(500);
-    });
-
-    it('Scenario 5 (Structural Inference E2E): สกัดความสัมพันธ์อัตโนมัติจากโครงสร้าง Next.js แม้ไม่มีการดึงโค้ดดิบ', async () => {
-      const { inferStructuralRelations } = await import('../lib/pipeline');
-      const files = [
-        { path: 'src/middleware.ts', fileType: 'middleware' as const },
-        { path: 'src/app/layout.tsx', fileType: 'page' as const },
-        { path: 'src/app/page.tsx', fileType: 'page' as const },
-        { path: 'src/app/dashboard/layout.tsx', fileType: 'page' as const },
-        { path: 'src/app/dashboard/page.tsx', fileType: 'page' as const },
-        { path: 'src/app/dashboard/actions.ts', fileType: 'action' as const },
-        { path: 'src/app/dashboard/components/Chart.tsx', fileType: 'component' as const }
-      ];
-
-      const relations = inferStructuralRelations(files);
-      expect(relations.length).toBeGreaterThan(0);
-
-      // ตรวจสอบว่า middleware ชี้ไป root
-      const middlewareEdge = relations.find(r => r.source === 'src/middleware.ts');
-      expect(middlewareEdge).toBeDefined();
-
-      // ตรวจสอบ server action edge
-      const actionEdge = relations.find(r => r.target === 'src/app/dashboard/actions.ts');
-      expect(actionEdge).toBeDefined();
-      expect(actionEdge?.type).toBe('action');
-
-      // ตรวจสอบ sub-route edge
-      const subRouteEdge = relations.find(r => r.label === 'sub-route');
-      expect(subRouteEdge).toBeDefined();
-    });
-
-    it('Scenario 6 (Component & Shared UI Linking): จับคู่ Component เอกพจน์เข้ากับ Route พหูพจน์ และเชื่อม Shared UI ไปยัง Root Entry', async () => {
-      const { inferStructuralRelations } = await import('../lib/pipeline');
-      const files = [
-        { path: 'src/app/layout.tsx', fileType: 'page' as const },
-        { path: 'src/app/page.tsx', fileType: 'page' as const },
-        { path: 'src/app/bands/page.tsx', fileType: 'page' as const },
-        { path: 'src/app/games/page.tsx', fileType: 'page' as const },
-        { path: 'src/components/BandCard.tsx', fileType: 'component' as const },
-        { path: 'src/components/GameExplorer.tsx', fileType: 'component' as const },
-        { path: 'src/components/ButtonComponent.tsx', fileType: 'component' as const },
-        { path: 'src/components/MemberItem.tsx', fileType: 'component' as const },
-      ];
-
-      const relations = inferStructuralRelations(files);
-      
-      // BandCard -> src/app/bands/page.tsx
-      const bandCardRel = relations.find(r => r.target === 'src/components/BandCard.tsx');
-      expect(bandCardRel).toBeDefined();
-      expect(bandCardRel?.source).toBe('src/app/bands/page.tsx');
-      expect(bandCardRel?.label).toBe('uses component');
-
-      // GameExplorer -> src/app/games/page.tsx
-      const gameExplorerRel = relations.find(r => r.target === 'src/components/GameExplorer.tsx');
-      expect(gameExplorerRel).toBeDefined();
-      expect(gameExplorerRel?.source).toBe('src/app/games/page.tsx');
-      expect(gameExplorerRel?.label).toBe('uses component');
-
-      // ButtonComponent -> src/app/layout.tsx (Shared UI)
-      const buttonRel = relations.find(r => r.target === 'src/components/ButtonComponent.tsx');
-      expect(buttonRel).toBeDefined();
-      expect(buttonRel?.source).toBe('src/app/layout.tsx');
-      expect(buttonRel?.label).toBe('shared UI');
-
-      // MemberItem -> src/app/layout.tsx (Shared UI)
-      const memberRel = relations.find(r => r.target === 'src/components/MemberItem.tsx');
-      expect(memberRel).toBeDefined();
-      expect(memberRel?.source).toBe('src/app/layout.tsx');
-      expect(memberRel?.label).toBe('shared UI');
-    });
+  it('ทนข้อมูลเสียโดยคืน null แทนการ throw', () => {
+    expect(decodeShareableState('')).toBeNull();
+    expect(decodeShareableState('!!!not-base64!!!')).toBeNull();
+    expect(encodeShareableState('')).toBe('');
   });
 });
 `;
 
 
-const RAW_GITHUB = `// src/lib/github.ts
-import { ParsedGitHubUrl } from '../types';
+
+const RAW_GITHUB = `import { ParsedGitHubUrl } from '../types';
 
 /**
- * ฟังก์ชันสำหรับแยกค่า owner และชื่อ repo ออกจาก URL ของ GitHub
+ * Extract branch name from URL path segments containing /tree/ or /blob/.
+ */
+function parseBranchFromSegments(segments: string[]): string | undefined {
+  const markerIndex = segments.findIndex((seg) => seg === 'tree' || seg === 'blob');
+  if (markerIndex === -1 || markerIndex + 1 >= segments.length) return undefined;
+  return segments[markerIndex + 1] || undefined;
+}
+
+/**
+ * Parse a GitHub repository URL into owner, repository, and optional branch.
  */
 export function parseGitHubUrl(url: string): ParsedGitHubUrl | null {
-  // TODO 1.1: ตรวจสอบความถูกต้องเบื้องต้น (Input Validation) - ตัดช่องว่าง และเช็คค่าว่าง
   if (!url || typeof url !== 'string') return null;
   const trimmedUrl = url.trim();
   if (!trimmedUrl) return null;
 
   try {
-    // เติม protocol ชั่วคราวกรณีที่ใส่มาแบบไม่มี https:// นำหน้า เพื่อให้ constructor ของ URL ทำงานได้
-    let fullUrl = trimmedUrl;
-    if (!/^https?:\\/\\//i.test(fullUrl)) {
-      fullUrl = 'https://' + fullUrl;
-    }
-
+    const fullUrl = /^https?:\\/\\//i.test(trimmedUrl) ? trimmedUrl : \`https://\${trimmedUrl}\`;
     const parsed = new URL(fullUrl);
 
-    // TODO 1.2: ตรวจสอบว่าเป็นโดเมน github.com หรือไม่
-    if (!parsed.hostname.toLowerCase().endsWith('github.com')) {
-      return null;
-    }
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname !== 'github.com' && hostname !== 'www.github.com') return null;
 
-    // TODO 1.3: ลบส่วนเกินที่ไม่เกี่ยวข้องออก (เช่น .git, query string, hash, /tree/main)
-    // ดึง pathname มาแยก segment โดยกรองค่าว่างออก
     const segments = parsed.pathname.split('/').filter(Boolean);
+    if (segments.length < 2) return null;
 
-    // TODO 1.4: สกัดค่า owner และ repo ส่งกลับเป็น Object
-    if (segments.length < 2) {
-      return null;
-    }
-
+    const branch = parseBranchFromSegments(segments);
     const owner = segments[0];
     let repo = segments[1];
+    if (repo.toLowerCase().endsWith('.git')) repo = repo.slice(0, -4);
 
-    // ตัดนามสกุล .git ท้าย repo ออก (ถ้ามี)
-    if (repo.toLowerCase().endsWith('.git')) {
-      repo = repo.slice(0, -4);
-    }
-
-    if (!owner || !repo) {
-      return null;
-    }
-
-    return { owner, repo };
+    return owner && repo ? { owner, repo, branch } : null;
   } catch {
     return null;
   }
 }
 
 /**
- * ฟังก์ชันสร้าง URL สำหรับเรียก GitHub REST API (Tree API แบบ Recursive)
+ * Build the recursive Git Tree API endpoint for a GitHub repository.
  */
 export function buildGitHubApiUrl(owner: string, repo: string, branch = 'main'): string {
-  // TODO 1.5: ประกอบ URL สำหรับเรียก GitHub Tree API ในรูปแบบ https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1
   return \`https://api.github.com/repos/\${owner}/\${repo}/git/trees/\${branch}?recursive=1\`;
 }
 
 /**
- * ฟังก์ชันประกอบ HTTP Headers สำหรับยิงเรียก GitHub API
- * รองรับ Personal Access Token (PAT) เป็นตัวเลือกเสริม
+ * Construct HTTP headers for GitHub API requests with optional authorization.
  */
 export function buildGitHubHeaders(token?: string): Record<string, string> {
-  // TODO 1.6: สร้าง headers พื้นฐานที่มี User-Agent: 'GitFlow-Visualizer'
   const headers: Record<string, string> = {
     'User-Agent': 'GitFlow-Visualizer',
   };
 
-  // TODO 1.7: ถ้ามี token ส่งเข้ามา (และไม่ใช่สตริงว่าง) ให้แนบ Authorization: \`Bearer \${token.trim()}\`
-  if (token && typeof token === 'string') {
-    const trimmedToken = token.trim();
-    if (trimmedToken.length > 0) {
-      headers['Authorization'] = \`Bearer \${trimmedToken}\`;
-    }
+  if (token && typeof token === 'string' && token.trim().length > 0) {
+    headers['Authorization'] = \`Bearer \${token.trim()}\`;
   }
 
   return headers;
 }
 
 /**
- * ฟังก์ชันสร้าง URL สำหรับดึง Raw Code ของไฟล์จริงเพื่อใช้ใน Side Inspector
+ * Build raw content URL for retrieving file source from GitHub.
  */
 export function buildGitHubRawUrl(owner: string, repo: string, filePathOrBranch: string, branchOrPath = 'main'): string {
   let filePath = filePathOrBranch;
   let branch = branchOrPath;
 
-  // ป้องกันกรณีสลับลำดับพารามิเตอร์ระหว่าง filePath กับ branch
   if (/\\.[a-zA-Z0-9]+$/.test(branchOrPath) && !/\\.[a-zA-Z0-9]+$/.test(filePathOrBranch)) {
     branch = filePathOrBranch;
     filePath = branchOrPath;
@@ -3850,7 +3450,7 @@ export function buildGitHubRawUrl(owner: string, repo: string, filePathOrBranch:
 }
 
 /**
- * ฟังก์ชันสร้าง URL สำหรับเปิดดูไฟล์บนหน้าเว็บ GitHub จริง (blob viewer)
+ * Build web URL for viewing a file directly on GitHub.
  */
 export function buildGitHubBlobUrl(owner: string, repo: string, filePath: string, branch = 'main'): string {
   const cleanPath = filePath.replace(/^\\/+/, '');

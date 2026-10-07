@@ -1,6 +1,76 @@
 // ============================================================
-// data-defense.js — คำตอบลึกสำหรับการป้องกันงาน + แนวทางต่อยอด + ไลบรารี
+// data-defense.js — แผนการพรีเซนต์ 15 นาที + คำตอบลึกสำหรับการป้องกันงาน + แนวทางต่อยอด + ไลบรารี
 // ============================================================
+
+const PRESENTATION_PLAN = [
+  {
+    phase: "1",
+    time: "2 นาที",
+    badge: "00:00 - 02:00",
+    title: "ที่มา วัตถุประสงค์ และขอบเขตระบบ",
+    roleFocus: "ภาพรวมโครงการ & ปัญหาของสถาปัตยกรรม Next.js App Router",
+    script: "เรียนอาจารย์ที่เคารพและเพื่อน ๆ ทุกคนครับ โครงงานของเราคือ 'Git Flowchart' เว็บช่วยวิเคราะห์และแปลงโค้ดจากคลัง GitHub ให้เป็นผังไดอะแกรมแบบ Interactive ในหน้าเดียว\n\nที่มาและปัญหาคือ ในโปรเจกต์ Next.js ยุคใหม่แบบ App Router มีไฟล์กระจัดกระจายเยอะมาก ทั้ง Page, Layout, Server Action, Middleware และ Store ย่อย เวลาโปรแกรมเมอร์เข้ามาอ่านโค้ดของคนอื่น จะไล่ดูยากมากว่าไฟล์ไหนเรียกไฟล์ไหน ปุ่มนี้กดแล้วยิงไปหา Action อะไร\n\nวัตถุประสงค์ของเรามี 4 ข้อหลัก:\n1. ดึงโครงสร้างไฟล์จาก GitHub API มาวิเคราะห์อัตโนมัติ\n2. สกัดความสัมพันธ์ทั้ง Import และ Action Triggers ออกมาเป็นไดอะแกรมที่กดโต้ตอบได้\n3. มีหน้าต่าง Side Drawer ส่องโค้ดจริงพร้อม Prism syntax highlighting โดยไม่ต้องสลับจอไป GitHub\n4. คำนวณคะแนน Coupling Health Score เพื่อประเมินคุณภาพสถาปัตยกรรมของโปรเจกต์\n\nขอบเขตระบบ: รองรับคลัง GitHub สาธารณะ, คัดกรองโฟลเดอร์ขยะ 16 ชนิด (node_modules, .next, tests), แยกประเภทไฟล์ 8 เลเยอร์, มี In-Memory Cache เพื่อการตอบสนองทันที, และระบบ Full-chain Trace Flow ไล่สายโค้ดตั้งแต่ต้นน้ำถึงปลายน้ำครับ",
+    keyPoints: [
+      "ระบุชื่อระบบ: 'Git Flowchart' (ไม่ใช่แค่แผนภาพธรรมดา แต่เป็นเครื่องมือช่วยอ่านโค้ด Next.js)",
+      "ปัญหาแท้จริง: ความซับซ้อนของ App Router ที่มี Server/Client Component และ Server Action ซ้อนกัน",
+      "ขอบเขตชัดเจน: คัดกรอง 16 โฟลเดอร์ขยะ, แยก 8 เลเยอร์, ทำแคชความเร็วสูง และมี Trace Flow",
+      "บทบาทของ Mali (คน 6): ดูแล Orchestration ทั้งหมด (API Route + Pipeline + Integration QA)"
+    ],
+    demoAction: "เปิดหน้าเว็บ https://git-flowcahrt.vercel.app โชว์หน้าตา Dark Minimal และ IBM Plex Sans Thai typography",
+    jumpFile: "page",
+    jumpLine: 15
+  },
+  {
+    phase: "2",
+    time: "5 นาที",
+    badge: "02:00 - 07:00",
+    title: "สาธิตการใช้งานระบบจริง (Live Demo)",
+    roleFocus: "ขั้นตอนการทำงานจากมุมมองผู้ใช้ (User Experience & Capabilities)",
+    script: "ต่อไปเป็นการสาธิตการใช้งานจริงครับ โดยแบ่งออกเป็น 4 สเต็ปหลักที่อาจารย์สามารถทดลองตามได้เลยครับ:\n\n1. การวิเคราะห์คลังโค้ด: นำ URL ของ GitHub (เช่น https://github.com/chsnor/git_flowcahrt) มาวางในช่องค้นหา สามารถใส่ Personal Access Token เพื่อเพิ่มโควตา API ได้ กดปุ่ม 'วิเคราะห์โค้ด' ระบบจะใช้เวลาเพียง 1-2 วินาทีในครั้งแรก และถ้ากดซ้ำจะตอบกลับจาก In-Memory Cache ภายในไม่กี่มิลลิวินาที (isCached: true)\n\n2. ผืนผ้าใบไดอะแกรม (React Flow + Dagre Layout): โหนดถูกจัดเรียงตามลำดับชั้นอย่างเป็นระเบียบ แบ่งสีตามบทบาทของไฟล์ชัดเจน (สีม่วง=Middleware, สีฟ้า=Page, สีส้ม=Action, สีเขียว=Store, สีชมพู=Component) สามารถซูม เลื่อน ย้ายโหนด และมี MiniMap ย่อมุมขวาล่าง\n\n3. ระบบสืบย้อนความสัมพันธ์ (Full-Chain Trace Flow): เมื่อคลิกที่โหนดใดโหนดหนึ่ง ระบบจะทำ Transitive Traversal ทั้งขาขึ้น (Ancestors) และขาลง (Descendants) เส้นเชื่อมและโหนดที่เกี่ยวข้องจะเรืองแสงชัดเจน ส่วนโหนดที่ไม่เกี่ยวข้องจะถูกเฟดจางลง ช่วยให้เข้าใจ Flow ได้ทันที\n\n4. แถบส่องซอร์สโค้ดจริง (Side Drawer): ดึงโค้ดจริงจาก GitHub ผ่าน CDN พร้อม PrismJS Syntax Highlighting มีเลขบรรทัด และปุ่มคัดลอกโค้ด รวมถึงแสดงคะแนน Coupling Health Score ของโปรเจกต์",
+    keyPoints: [
+      "โชว์ความเร็ว In-Memory Cache: วิเคราะห์ครั้งที่ 2 ตอบกลับทันที 0ms",
+      "โชว์ Dagre Hierarchical Layout: โหนดไม่ทับกัน ไม่ลอยเคว้ง เป็นระเบียบ",
+      "โชว์ Trace Flow: ส่อง lineage ทั้งขาขึ้น (Upstream) และขาลง (Downstream) แบบ full chain",
+      "โชว์ Side Drawer: อ่านโค้ดจริงได้ในหน้าเดียว ไม่ต้องสลับแท็บไป GitHub"
+    ],
+    demoAction: "กดลองคลังจริง → กดโหนด page.tsx เพื่อดูเส้นเชื่อมต่อ → เปิด Drawer ส่องโค้ด → ชี้ให้ดูคะแนน Coupling",
+    jumpFile: "flowcanvas",
+    jumpLine: 45
+  },
+  {
+    phase: "3",
+    time: "5 นาที",
+    badge: "07:00 - 12:00",
+    title: "อธิบายโครงสร้างและ Flow ของโค้ด (Architecture)",
+    roleFocus: "สถาปัตยกรรม 3 ส่วน, Pipeline Orchestrator & บทบาทคน 6",
+    script: "ในส่วนโครงสร้างและ Flow ของโค้ด ระบบของเราออกแบบเป็น 3 ส่วนหลักตามหลัก Modular Architecture:\n\nส่วนที่ 1: Frontend (Client-side) — รับผิดชอบโดยคน 4 (page.tsx), คน 3 (FlowCanvas.tsx), และคน 5 (SideDrawer.tsx) คุม state และแสดงผลกราฟ\n\nส่วนที่ 2: API & Pipeline (Orchestrator) — รับผิดชอบโดยคน 6 (ผม/มะลิ) มี 2 ไฟล์หัวใจสำคัญ:\n- route.ts: เป็น API Boundary รับคำขอ POST /api/analyze, มี Guard ตรวจสอบ URL และจัดการ Error ปลอดภัย\n- pipeline.ts: เป็นผู้คุมคิว 6 จังหวะ (Orchestrator) ประสานงานเพื่อนทั้ง 5 คน:\n  • จังหวะ 1: โหลดโมดูล & ตรวจ In-Memory Cache (O(1))\n  • จังหวะ 2: Helper ประจำตัว resolveImportToFilePath & inferStructuralRelations เดาความสัมพันธ์อัตโนมัติ\n  • จังหวะ 3: ส่ง URL ให้ github.ts (คน 1) แกะ owner/repo\n  • จังหวะ 4: ดึง Trees API แบบ ?recursive=1 แล้วส่งให้ parser.ts (คน 2) กรองไฟล์และแยกเลเยอร์\n  • จังหวะ 5: สกัด Import และ Action triggers พร้อม fallback branch 'master' ถ้า main ตอบ 404\n  • จังหวะ 6: ส่งต่อให้ generator.ts (คน 3) คำนวณ Dagre layout และคืนค่า AnalysisResult\n\nส่วนที่ 3: Integration QA & Test Suite — คน 6 ออกแบบ Integration Test ครอบคลุม 6 ไฟล์ 98 เคสทดสอบ รันอัตโนมัติบน GitHub Actions CI/CD ทุกครั้งที่มีการ Push ครับ",
+    keyPoints: [
+      "อธิบายบทบาท Orchestrator: route.ts = Contract / pipeline.ts = Policy",
+      "Integration-First & Defensive Coding: มี Fallback Guard ทุกจุด เพื่อนพังระบบก็ไม่ล่ม",
+      "Branch Auto-Fallback: main 404 → ลอง master อัตโนมัติ",
+      "QA Coverage: เทสต์ 6 ไฟล์ 98 เคส รันผ่าน CI ทุก commit"
+    ],
+    demoAction: "สลับไปโหมด 'เจาะสเต็ป' โชว์โค้ดคู่ขนานซ้าย-ขวา ระหว่าง pipeline.ts กับโมดูลเพื่อน",
+    jumpFile: "pipeline",
+    jumpLine: 261
+  },
+  {
+    phase: "4",
+    time: "3 นาที",
+    badge: "12:00 - 15:00",
+    title: "ตอบคำถามและข้อเสนอแนะ (Defense Q&A)",
+    roleFocus: "ความแม่นยำในการตอบคำถามเชิงลึก, ข้อจำกัด และแนวทางขยายระบบ",
+    script: "เข้าสู่ช่วงตอบคำถามครับ ซึ่งผมได้เตรียมคำตอบสำหรับประเด็นที่อาจารย์อาจสงสัยไว้เรียบร้อยแล้วครับ:\n\n1. ทำไมใช้ In-Memory Cache แทน Redis?\n→ ในเวอร์ชันส่งงาน รันบน single instance การใช้ JavaScript Map มี overhead เป็น 0 (O(1)) ไม่ต้องพึ่งพา infrastructure ภายนอก หากสเกลเป็น Multi-instance ในอนาคต จะเปลี่ยนเป็น Redis + TTL ตาม Roadmap P1 ครับ\n\n2. ทำไมแกะ import ด้วย Regex แทน AST Parser?\n→ เพราะระบบดึงโค้ดจาก GitHub CDN เป็น string ใน runtime ไม่มี compiler environment ของโปรเจกต์เป้าหมาย Regex จึงเบาและเร็วที่สุด พร้อมทั้งมี inferStructuralRelations มาช่วยเติมเต็มความสัมพันธ์ระดับโฟลเดอร์\n\n3. การรับมือ Rate Limit ของ GitHub API?\n→ รองรับการแนบ Personal Access Token ในหน้า UI (เพิ่มจาก 60 เป็น 5,000 req/hr) และคัดกรองดึงเฉพาะไฟล์จำเป็นไม่เกิน 45 ไฟล์ พร้อม timeout 4 วินาที\n\n4. แผนการพัฒนาต่อยอด (Future Work)?\n→ จัดลำดับ 5 ลำดับความสำคัญ: ผูกแคชกับ Commit SHA, เปลี่ยนงานใหญ่เป็น Async Background Job, ยกระดับ Parser ด้วย Web-tree-sitter (WASM), และระบบ Full-edit commit กลับ GitHub ครับ",
+    keyPoints: [
+      "ตอบอย่างมั่นใจด้วยหลักวิศวกรรมซอฟต์แวร์ (Trade-off Analysis)",
+      "ยอมรับข้อจำกัดของระบบปัจจุบันอย่างโปร่งใส พร้อมเสนอ Solution ใน Roadmap",
+      "ชี้ให้เห็นว่าระบบมี Seam และแยกโมดูลอย่างเป็นอิสระ (Decoupled Architecture)"
+    ],
+    demoAction: "เปิดแท็บ 'ซ้อม' หรือ 'ระบบ' โชว์ Red Team Insights และคำตอบเจาะลึก 5 มิติ",
+    jumpFile: "route",
+    jumpLine: 9
+  }
+];
 
 const DEFENSE_DEEP = [
   {
@@ -35,11 +105,11 @@ const DEFENSE_DEEP = [
   {
     id: "fallback", cat: "การตัดสินใจ", q: "ทำไมมีโค้ดสำรองซ้ำ ๆ ทั้งที่คน 1/2 ก็เขียนฟังก์ชันเหมือนกัน?",
     short: "เพื่อให้ระบบรันได้ในวันที่เพื่อนยังไม่ส่งงาน และกัน pipeline ตายเมื่อโมดูลคนอื่น throw",
-    deep: "เป็นการเขียนแบบ integration-first: ทุกจุดที่เรียกโมดูลคนอื่นมี try/catch + ค่า fallback เช่น pipeline:277-291 แกะ URL เองถ้า parseGitHubUrl ล้ม, pipeline:365-377 กรองเองถ้า filterTreeFiles ล้ม, pipeline:381-392 จำแนกชนิดไฟล์เองถ้า detectNextFileType ล้ม ข้อดีคือ demo ได้วันแรกและไม่มี single point of failure ข้อเสียคือโค้ดซ้ำและอาจได้ผลลัพธ์ไม่เหมือนกัน",
+    deep: "เป็นการเขียนแบบ integration-first: ทุกจุดที่เรียกโมดูลคนอื่นมี try/catch + ค่า fallback เช่น pipeline:422-432 แกะ URL เองถ้า parseGitHubUrl ล้ม, pipeline:467-478 กรองเองถ้า filterTreeFiles ล้ม, pipeline:482-490 จำแนกชนิดไฟล์เองถ้า detectNextFileType ล้ม ข้อดีคือ demo ได้วันแรกและไม่มี single point of failure ข้อเสียคือโค้ดซ้ำและอาจได้ผลลัพธ์ไม่เหมือนกัน",
     bullets: [
-      "pipeline:278 เรียก parseGitHubUrl → ถ้าพังใช้การตัดสตริงเองที่ :281-290",
-      "pipeline:366 เรียก filterTreeFiles → ถ้าพังกรองเองที่ :369-376",
-      "pipeline:382 เรียก detectNextFileType → ถ้าพังเดาจากชื่อไฟล์ที่ :384-391",
+      "pipeline:423 เรียก parseGitHubUrl → ถ้าพังใช้การตัดสตริงเองที่ :281-290",
+      "pipeline:468 เรียก filterTreeFiles → ถ้าพังกรองเองที่ :369-376",
+      "pipeline:483 เรียก detectNextFileType → ถ้าพังเดาจากชื่อไฟล์ที่ :384-391",
       "ทุกจุดมีคอมเมนต์บอกว่าเป็น 'สำรองระหว่างรอ' ของใคร"
     ],
     libs: [{ name: "Vitest spy / vi.mock", why: "ทดสอบว่า fallback ทำงานจริง โดย mock ให้ฟังก์ชันของเพื่อน throw", trade: "ต้องมี seam (dependency injection หรือ import ตรง ๆ) ถ้า mock ไม่ได้แปลว่าโค้ดผูกกันแน่นเกิน" }],
@@ -48,7 +118,7 @@ const DEFENSE_DEEP = [
   {
     id: "cache", cat: "ประสิทธิภาพ", q: "ทำไมใช้ cache เป็น Map ในหน่วยความจำ ไม่ใช้ Redis?",
     short: "เพราะ deployment นี้รัน instance เดียว ใช้ Map ได้ผลทันทีและไม่ต้องมี dependency ภายนอก",
-    deep: "pipeline:11 ประกาศ pipelineCache เป็น Map<string, AnalysisResult> ตรวจที่ :301 และบันทึกที่ :554 ทุกครั้ง ข้อดีคือ O(1) และไม่มี network hop ข้อเสียที่ต้องยอมรับ: หายเมื่อ process restart, แยกข้อมูลไม่ได้หลาย instance, ไม่มี TTL และโตไม่จำกัด (คนยิง URL แปลง ๆ ได้จนกิน RAM) ถ้าจะต่อยอดจริงต้องมีทั้ง LRU + TTL และย้ายไป Redis เมื่อมีหลาย instance",
+    deep: "pipeline:23 ประกาศ pipelineCache เป็น Map<string, AnalysisResult> ตรวจที่ :301 และบันทึกที่ :554 ทุกครั้ง ข้อดีคือ O(1) และไม่มี network hop ข้อเสียที่ต้องยอมรับ: หายเมื่อ process restart, แยกข้อมูลไม่ได้หลาย instance, ไม่มี TTL และโตไม่จำกัด (คนยิง URL แปลง ๆ ได้จนกิน RAM) ถ้าจะต่อยอดจริงต้องมีทั้ง LRU + TTL และย้ายไป Redis เมื่อมีหลาย instance",
     bullets: [
       "คีย์คือ URL ที่ผู้ใช้กรอก ไม่ใช่ SHA ของโค้ด → ถ้าคลังอัปเดต ผลเก่าจะค้าง จึงควรมี TTL",
       "isCached: true บอก UI ว่าเป็นผลจากแคช ไม่ใช่การวิเคราะห์ใหม่",
@@ -65,10 +135,10 @@ const DEFENSE_DEEP = [
     short: "มาจากสมดุลระหว่างความครบถ้วนกับเวลาตอบกลับที่ยอมรับได้ ไม่ใช่ตัวเลขสุ่ม",
     deep: "ดึงโค้ดดิบคือขั้นที่แพงที่สุด เพราะแต่ละไฟล์คือ 1 HTTP request ไป raw.githubusercontent.com การยิงครั้งละ 45 ไฟล์ด้วย Promise.all ใช้เวลาประมาณ 2-4 วินาทีบนเน็ตปกติ ถ้าเกิน 500 ไฟล์กราฟจะใหญ่จนอ่านไม่ออกและเวลาเรนเดอร์ของคน 4 จะหนัก เกณฑ์เหล่านี้ควรเป็น config ไม่ใช่ตัวเลขฝังในโค้ด",
     bullets: [
-      "pipeline:397 เลือกเฉพาะไฟล์ซอร์สโค้ด → :411 ตัดที่ 45 → :419 AbortController 4 วินาที → :430 กันพังรายไฟล์",
-      "filterTreeFiles ถูกส่ง maxLimit = 500 ที่ pipeline:366",
+      "pipeline:493 เลือกเฉพาะไฟล์ซอร์สโค้ด → :411 ตัดที่ 45 → :419 AbortController 4 วินาที → :430 กันพังรายไฟล์",
+      "filterTreeFiles ถูกส่ง maxLimit = 500 ที่ pipeline:468",
       "code-viewer.ts:62 ตัดโค้ดที่แสดงผลไว้ 300 บรรทัด เพื่อคุมขนาด DOM",
-      "executionTimeMs ที่ pipeline:550 ใช้วัดจริงว่าช้าตรงไหน"
+      "executionTimeMs ที่ pipeline:564 ใช้วัดจริงว่าช้าตรงไหน"
     ],
     libs: [{ name: "p-limit / Bottleneck", why: "จำกัดจำนวน request พร้อมกันแทน Promise.all เต็มพลัง ลดโอกาสโดน rate limit", trade: "ช้าลงเล็กน้อยแต่เสถียรกว่า" }],
     extend: ["ย้ายค่าทั้งหมดเป็น config แล้วให้ผู้ใช้ปรับผ่านตัวเลือกใน UI", "ดึงโค้ดแบบ on-demand ตอนคลิก node แทนดึงล่วงหน้า 45 ไฟล์"]
@@ -76,12 +146,12 @@ const DEFENSE_DEEP = [
   {
     id: "regex", cat: "คุณภาพโค้ด", q: "ทำไมแกะ import ด้วย regex ไม่ใช้ AST parser?",
     short: "เพราะเราต้องแกะโค้ดของคนอื่นที่รันมาแบบ runtime ซึ่งไม่มีไฟล์บนดิสก์ให้ compiler อ่าน",
-    deep: "ถ้ามีไฟล์จริงบนเครื่อง เราจะใช้ TypeScript compiler API หรือ SWC ได้ แต่ GitFlow ดึงโค้ดเป็นสตริงจาก raw CDN ไม่ได้มี module resolution ของโปรเจกต์นั้นมา การใช้ regex จึงเป็นทางเลือกที่รันได้ทุกที่ไม่ต้องมี bundler ข้อเสียที่ต้องรู้คือมันพลาดกรณีซับซ้อน: dynamic import, require แบบ CommonJS, multiline ซับซ้อน และโค้ดที่ถูกสร้างด้วย template literal ทางแก้คือจำกัดขอบเขตให้ชัด (เก็บแค่ import ที่ขึ้นต้นด้วย ./ ../ @/ ~ ตาม parser:193) และมีเส้นสำรอง inferStructuralRelations เติมส่วนที่ regex หาไม่เจอ",
+    deep: "ถ้ามีไฟล์จริงบนเครื่อง เราจะใช้ TypeScript compiler API หรือ SWC ได้ แต่ GitFlow ดึงโค้ดเป็นสตริงจาก raw CDN ไม่ได้มี module resolution ของโปรเจกต์นั้นมา การใช้ regex จึงเป็นทางเลือกที่รันได้ทุกที่ไม่ต้องมี bundler ข้อเสียที่ต้องรู้คือมันพลาดกรณีซับซ้อน: dynamic import, require แบบ CommonJS, multiline ซับซ้อน และโค้ดที่ถูกสร้างด้วย template literal ทางแก้คือจำกัดขอบเขตให้ชัด (เก็บแค่ import ที่ขึ้นต้นด้วย ./ ../ @/ ~ ตาม parser:213) และมีเส้นสำรอง inferStructuralRelations เติมส่วนที่ regex หาไม่เจอ",
     bullets: [
-      "parser:179 String Guard คืน [] ทันทีถ้าไม่มีคำว่า import ประหยัดเวลา",
-      "parser:183 ตัดคอมเมนต์ออกก่อน ไม่งั้นจะจับ import ในคอมเมนต์",
-      "parser:187 regex รองรับทั้ง import x from และ import type",
-      "parser:194 ใช้ seenTargets กัน import ซ้ำ",
+      "parser:200 String Guard คืน [] ทันทีถ้าไม่มีคำว่า import ประหยัดเวลา",
+      "parser:204 ตัดคอมเมนต์ออกก่อน ไม่งั้นจะจับ import ในคอมเมนต์",
+      "parser:207 regex รองรับทั้ง import x from และ import type",
+      "parser:214 ใช้ seenTargets กัน import ซ้ำ",
       "ทั้งหมดนี้มีเทสต์ครอบใน 2_parser.test.ts (177 บรรทัด)"
     ],
     libs: [
@@ -93,10 +163,10 @@ const DEFENSE_DEEP = [
   {
     id: "security", cat: "ความปลอดภัย", q: "มีจุดเสี่ยงด้านความปลอดภัยอะไรบ้าง แล้วกันไว้ตรงไหน?",
     short: "4 จุดหลัก: token, SSRF จาก URL, XSS จากการแสดงโค้ด, และการไม่จำกัดอัตราการเรียก",
-    deep: "ระบบรับ URL จากผู้ใช้แล้วไปยิงต่อ จึงต้องระวังการใช้ URL เป็นช่องทางออกนอกระบบ (SSRF) รวมถึงการแสดงโค้ดของคนอื่นในหน้าเว็บต้อง escape เสมอ สิ่งที่ทำไปแล้วคือ pipeline:293-295 บล็อก URL ที่แกะไม่ได้, route.ts:16-21 ตรวจ body, github.ts ตรวจโดเมนเป็น github.com เท่านั้น และไม่ส่ง token กลับมาที่ client ส่วนที่ยังควรเพิ่มคือ rate limit, ตรวจ redirect ของ raw CDN และห้าม path ที่ขึ้นต้นด้วย ..",
+    deep: "ระบบรับ URL จากผู้ใช้แล้วไปยิงต่อ จึงต้องระวังการใช้ URL เป็นช่องทางออกนอกระบบ (SSRF) รวมถึงการแสดงโค้ดของคนอื่นในหน้าเว็บต้อง escape เสมอ สิ่งที่ทำไปแล้วคือ pipeline:434-436 บล็อก URL ที่แกะไม่ได้, route.ts:16-21 ตรวจ body, github.ts ตรวจโดเมนเป็น github.com เท่านั้น และไม่ส่ง token กลับมาที่ client ส่วนที่ยังควรเพิ่มคือ rate limit, ตรวจ redirect ของ raw CDN และห้าม path ที่ขึ้นต้นด้วย ..",
     bullets: [
-      "github.ts:7 parseGitHubUrl ทำหน้าที่เป็น allowlist ของโดเมน — ขวัญคือจุดแรกที่ต้องเข้ม",
-      "pipeline:281-290 โค้ดสำรองตัดสตริงจาก URL ต้องระวังไม่ให้กลายเป็นช่องเปิดกว้างเกินไป",
+      "github.ts:25 parseGitHubUrl ทำหน้าที่เป็น allowlist ของโดเมน — ขวัญคือจุดแรกที่ต้องเข้ม",
+      "pipeline:425-431 โค้ดสำรองตัดสตริงจาก URL ต้องระวังไม่ให้กลายเป็นช่องเปิดกว้างเกินไป",
       "หน้าเว็บแสดงโค้ดที่ดึงมาจากคลังคนอื่น → ต้อง escape HTML ก่อน render เสมอ",
       "โครงการนี้เป็นเครื่องมือช่วยอ่านโค้ด ไม่ใช่ระบบที่รับไฟล์อัปโหลด → พื้นที่การรันโค้ดของคนอื่นจึงไม่มี"
     ],
@@ -107,13 +177,13 @@ const DEFENSE_DEEP = [
     extend: ["เพิ่ม allowlist owner สำหรับคลังสาธารณะที่อนุญาต", "บันทึก audit log ว่าใครใช้ token อะไรเมื่อไร"]
   },
   {
-    id: "testing", cat: "คุณภาพโค้ด", q: "มีเทสต์ 6 ไฟล์ ครอบอะไรบ้าง และพอสำหรับงานระดับนี้ไหม?",
-    short: "ครอบครบทั้ง unit ของแต่ละคน, logic ฝั่ง UI และ integration ทั้งเส้นทาง",
-    deep: "โครงสร้างเทสต์บอกเจตนาชัด: 1_github (140) ทดสอบการแกะ URL และสร้าง header, 2_parser (177) ทดสอบการกรองและจำแนกชนิดไฟล์, 3_generator (89) ทดสอบการสร้าง node/edge, 4_frontend_ui (106) ทดสอบตรรกะฝั่ง UI เช่น validateUrlInput, 5_side_drawer (62) ทดสอบการตัดโค้ดสำหรับ drawer, 6_integration (561) ทดสอบเส้นทางจริงตั้งแต่ URL จนได้ AnalysisResult โดย mock fetch ไฟล์เดียวจบข้อเสียที่ยอมรับได้คือยังไม่มี e2e จริง และ route.ts เอง (37 บรรทัด) ยังไม่มีเทสต์ตรง",
+    id: "testing", cat: "คุณภาพโค้ด", q: "มีเทสต์ 4 ไฟล์ ครอบอะไรบ้าง และพอสำหรับงานระดับนี้ไหม?",
+    short: "ครอบหน่วยของทุกโมดูลฝั่ง logic (คน 1-4) รวม 51 เคส และรันอัตโนมัติบน CI",
+    deep: "โครงสร้างเทสต์บอกเจตนาชัด: github.test.ts (79) ทดสอบการแกะ URL รวมชื่อ branch และการปฏิเสธ hostname ปลอม, parser.test.ts (193) ทดสอบการกรองไฟล์และการจำแนกเลเยอร์ 9 บทบาท, generator.test.ts (106) ทดสอบ node/edge/สี/Mermaid, ui-helper.test.ts (98) ทดสอบด่านตรวจ URL สถิติ เกรด และระบบแชร์ลิงก์ รวม 51 เคส และรันด้วย npm test บน CI ทุกครั้งที่ push/PR ข้อเสียที่ยอมรับได้คือยังไม่มี e2e จริง และ route.ts เอง (37 บรรทัด) ยังไม่มีเทสต์ตรง",
     bullets: [
       "ใช้ Vitest ตาม scripts ใน package.json (npm test = vitest run)",
       "เทสต์ฝั่ง UI ทดสอบฟังก์ชันล้วน ไม่ต้องมี DOM จริง เพราะ logic ถูกแยกไว้ใน ui-helper.ts",
-      "เทสต์ integration ใช้ mockTreeData และ mockFilesContent ที่ pipeline:269-270 รับเข้ามา",
+      "เทสต์ integration ใช้ mockTreeData และ mockFilesContent ที่ pipeline:415-416 รับเข้ามา",
       "beforeEach/afterEach มีการคืน mocks เพื่อไม่ให้เคสรั่วกัน"
     ],
     libs: [{ name: "Playwright", why: "เติม e2e จริง: กรอก URL → เห็นกราฟ → คลิก node → เห็นโค้ด", trade: "ต้องมี browser ใน CI ช้ากว่า unit test หลายเท่า" }, { name: "MSW", why: "mock network ระดับ request แทนการ stub fetch", trade: "เพิ่มความซับซ้อนในการตั้งค่า" }],
@@ -142,7 +212,7 @@ const DEFENSE_DEEP = [
     short: "5 อันดับ: แคช → งาน async → ความแม่นของการแกะโค้ด → rate limit → ประสิทธิภาพหน้าจอ",
     deep: "ลำดับนี้มาจากผลตอบแทนต่อความเสี่ยง ไม่ใช่ความยาก เพราะแคชคือบรรทัดเดียวที่เปลี่ยนประสิทธิภาพได้มากที่สุดในงานสั้น ๆ ส่วนการแกะโค้ดให้แม่นขึ้นคืองานใหญ่ที่สุดแต่ค่อยเป็นค่อยไป",
     bullets: [
-      "อันดับ 1: เพิ่ม TTL + LRU ให้แคชที่ pipeline:11 แล้วผูกกับ SHA ของ commit",
+      "อันดับ 1: เพิ่ม TTL + LRU ให้แคชที่ pipeline:23 แล้วผูกกับ SHA ของ commit",
       "อันดับ 2: ถ้าคลังใหญ่เกิน ~3 วินาที เปลี่ยนเป็น background job แล้วให้ client poll สถานะ",
       "อันดับ 3: ย้ายการแกะ import จาก regex ไปเป็น AST (web-tree-sitter) เพิ่มความแม่น",
       "อันดับ 4: เพิ่ม rate limit ต่อ IP ที่ route.ts และล็อก audit log",

@@ -10,16 +10,16 @@ const ARCH_LAYERS = [
     files: ["github"],
     io: "เข้า: owner, repo, branch, token → ออก: GitHubTreeItem[] (file tree ทั้งรอบเดียว)",
     steps: [
-      { t: "ตรวจโดเมน", d: "ต้องเป็น github.com เท่านั้น ผ่าน regex ใน parseGitHubUrl", ref: ["github", 7] },
-      { t: "แยก segment", d: "ตัด .git ท้าย URL แล้วแยก owner / repo / branch", ref: ["github", 16] },
-      { t: "ประกอบ URL", d: "buildGitHubApiUrl ประกอบ /git/trees/{branch}?recursive=1", ref: ["github", 57] },
-      { t: "แนบ Token", d: "buildGitHubHeaders ใส่ User-Agent และ Bearer token ถ้ามี", ref: ["github", 66] },
-      { t: "Raw CDN", d: "buildGitHubRawUrl ใช้ดึงตัวโค้ดดิบของแต่ละไฟล์ภายหลัง", ref: ["github", 86] }
+      { t: "ตรวจโดเมน", d: "ต้องเป็น github.com เท่านั้น ผ่าน regex ใน parseGitHubUrl", ref: ["github", 15] },
+      { t: "แยก segment", d: "ตัด .git ท้าย URL แล้วแยก owner / repo / branch", ref: ["github", 28] },
+      { t: "ประกอบ URL", d: "buildGitHubApiUrl ประกอบ /git/trees/{branch}?recursive=1", ref: ["github", 44] },
+      { t: "แนบ Token", d: "buildGitHubHeaders ใส่ User-Agent และ Bearer token ถ้ามี", ref: ["github", 51] },
+      { t: "Raw CDN", d: "buildGitHubRawUrl ใช้ดึงตัวโค้ดดิบของแต่ละไฟล์ภายหลัง", ref: ["github", 66] }
     ],
     edge: [
-      "repo ที่ใช้ branch 'master' → pipeline จับ 404 แล้ว fallback อัตโนมัติ (pipeline 323-332)",
-      "token ว่าง/เว้นวรรค → ตัด .trim() แล้วข้าม Authorization (github 73-75)",
-      "ไม่มีสิทธิ์เข้าถึง → 403 → ต้องขึ้นข้อความแนะนำให้ใส่ Token (pipeline 339-341)"
+      "repo ที่ใช้ branch 'master' → pipeline จับ 404 แล้ว fallback อัตโนมัติ (pipeline 313-323)",
+      "token ว่าง/เว้นวรรค → ตัด .trim() แล้วข้าม Authorization (github 56-58)",
+      "ไม่มีสิทธิ์เข้าถึง → 403 → ต้องขึ้นข้อความแนะนำให้ใส่ Token (pipeline 461-461)"
     ],
     decisions: [
       { q: "ทำไมใช้ Trees API ไม่ยิงทีละโฟลเดอร์", a: "1 คำขอ = ทั้งโปรเจกต์ rate limit จาก O(n) เหลือ O(1) และไม่ต้องเดา path" },
@@ -33,12 +33,12 @@ const ARCH_LAYERS = [
     files: ["parser"],
     io: "เข้า: GitHubTreeItem[] → ออก: ไฟล์ที่ผ่านเกณฑ์ + fileType ของแต่ละไฟล์",
     steps: [
-      { t: "Blacklist โฟลเดอร์", d: "ทิ้ง node_modules/.next/tests/docs ฯลฯ 17 รายการ", ref: ["parser", 4] },
-      { t: "Blacklist ไฟล์", d: "ทิ้ง lockfile / tsconfig / config ทั้งหมด", ref: ["parser", 24] },
+      { t: "Blacklist โฟลเดอร์", d: "ทิ้ง node_modules/.next/tests/docs ฯลฯ 17 รายการ", ref: ["parser", 14] },
+      { t: "Blacklist ไฟล์", d: "ทิ้ง lockfile / tsconfig / config ทั้งหมด", ref: ["parser", 28] },
       { t: "รักษาไฟล์ราก", d: "เก็บเฉพาะ middleware.ts / proxy.ts ที่อยู่รากโปรเจกต์", ref: ["parser", 49] },
-      { t: "เช็คนามสกุล", d: "รับเฉพาะ .ts .tsx .js .jsx", ref: ["parser", 56] },
-      { t: "จำกัดจำนวน", d: "ตัดที่ maxLimit (pipeline ส่งค่า 500)", ref: ["parser", 62] },
-      { t: "จำแนกชนิดไฟล์", d: "page/layout/action/middleware/store/component/api/other", ref: ["parser", 119] }
+      { t: "เช็คนามสกุล", d: "รับเฉพาะ .ts .tsx .js .jsx", ref: ["parser", 60] },
+      { t: "จำกัดจำนวน", d: "ตัดที่ maxLimit (pipeline ส่งค่า 500)", ref: ["parser", 101] },
+      { t: "จำแนกชนิดไฟล์", d: "page/layout/action/middleware/store/component/api/other", ref: ["parser", 129] }
     ],
     edge: [
       "ไฟล์ 0 ไบต์หรือ binary → ตัดทิ้งก่อนแตะ raw CDN ประหยัด request",
@@ -47,7 +47,7 @@ const ARCH_LAYERS = [
     ],
     decisions: [
       { q: "ทำไมใช้ Set เก็บ BLACKLIST_FILES", a: "ค้น O(1) แทน O(n) ตอนกรองหลายพันไฟล์ และกันรายการซ้ำ" },
-      { q: "ทำไมต้องมี try/catch ครอบใน pipeline", a: "ช่วงที่คน 2 ยังไม่ส่งงาน ระบบต้องรันได้ด้วย fallback เอง (pipeline 367-377)" }
+      { q: "ทำไมต้องมี try/catch ครอบใน pipeline", a: "ช่วงที่คน 2 ยังไม่ส่งงาน ระบบต้องรันได้ด้วย fallback เอง (pipeline 478-488)" }
     ],
     extend: ["เรียงลำดับความสำคัญไฟล์ entrypoint มาก่อน test", "ใช้ขนาดไฟล์เป็นเกณฑ์ตัด ไม่ดึงไฟล์ใหญ่เกิน 500KB"]
   },  {
@@ -56,11 +56,11 @@ const ARCH_LAYERS = [
     files: ["pipeline", "github"],
     io: "เข้า: รายการไฟล์ที่ผ่านชั้น 2 → ออก: Record<path, code> สูงสุด 45 ไฟล์",
     steps: [
-      { t: "เลือกเฉพาะโค้ด", d: "กรองเฉพาะ .ts/.tsx/.js/.jsx ที่ยังไม่เคยดึง", ref: ["pipeline", 397] },
-      { t: "ดึงพร้อมกัน", d: "รวมเป็น batch แล้ว Promise.all", ref: ["pipeline", 405] },
-      { t: "ตัดที่ 45 ไฟล์", d: "เก็บเฉพาะ 45 ไฟล์แรก คุมเวลาและขนาด payload", ref: ["pipeline", 411] },
-      { t: "timeout 4 วิ", d: "ทุก fetch มี AbortController ตัดที่ 4 วินาที", ref: ["pipeline", 419] },
-      { t: "กันพังรายไฟล์", d: "ไฟล์เดียวโหลดไม่ได้ ไม่ทำให้ทั้งงานพัง", ref: ["pipeline", 430] }
+      { t: "เลือกเฉพาะโค้ด", d: "กรองเฉพาะ .ts/.tsx/.js/.jsx ที่ยังไม่เคยดึง", ref: ["pipeline", 521] },
+      { t: "ดึงพร้อมกัน", d: "รวมเป็น batch แล้ว Promise.all", ref: ["pipeline", 521] },
+      { t: "ตัดที่ 45 ไฟล์", d: "เก็บเฉพาะ 45 ไฟล์แรก คุมเวลาและขนาด payload", ref: ["pipeline", 508] },
+      { t: "timeout 4 วิ", d: "ทุก fetch มี AbortController ตัดที่ 4 วินาที", ref: ["pipeline", 516] },
+      { t: "กันพังรายไฟล์", d: "ไฟล์เดียวโหลดไม่ได้ ไม่ทำให้ทั้งงานพัง", ref: ["pipeline", 524] }
     ],
     edge: [
       "ไฟล์ใหญ่มาก → ตัดที่ 45 ไฟล์แรก พร้อมบอกผู้ใช้ว่ายังไม่ครบ",
@@ -79,16 +79,16 @@ const ARCH_LAYERS = [
     files: ["parser", "pipeline"],
     io: "เข้า: Record<path, code> → ออก: CodeRelation[] (source, target, type, label)",
     steps: [
-      { t: "ตัดคอมเมนต์ออก", d: "ลบ /* */ และ // ก่อน regex ไม่ให้จับของปลอม", ref: ["parser", 183] },
-      { t: "จับ import", d: "regex รองรับทั้ง import x from และ import type", ref: ["parser", 187] },
-      { t: "กรองเฉพาะ relative", d: "เก็บเฉพาะ ./ ../ @/ ~/ ข้าม package ภายนอก", ref: ["parser", 193] },
-      { t: "กันซ้ำ", d: "seenTargets กัน import เดิมซ้ำในไฟล์เดียว", ref: ["parser", 194] },
-      { t: "จับ action/event", d: "onClick และ form action กลายเป็นเส้น animated", ref: ["parser", 211] },
-      { t: "เติมเส้นสำรอง", d: "ถ้าไม่เจอ import เลย ใช้ inferStructuralRelations เดาเส้นเชิงโครงสร้าง", ref: ["pipeline", 460] }
+      { t: "ตัดคอมเมนต์ออก", d: "ลบ /* */ และ // ก่อน regex ไม่ให้จับของปลอม", ref: ["parser", 175] },
+      { t: "จับ import", d: "regex รองรับทั้ง import x from และ import type", ref: ["parser", 182] },
+      { t: "กรองเฉพาะ relative", d: "เก็บเฉพาะ ./ ../ @/ ~/ ข้าม package ภายนอก", ref: ["parser", 192] },
+      { t: "กันซ้ำ", d: "seenTargets กัน import เดิมซ้ำในไฟล์เดียว", ref: ["parser", 195] },
+      { t: "จับ action/event", d: "onClick และ form action กลายเป็นเส้น animated", ref: ["parser", 213] },
+      { t: "เติมเส้นสำรอง", d: "ถ้าไม่เจอ import เลย ใช้ inferStructuralRelations เดาเส้นเชิงโครงสร้าง", ref: ["pipeline", 541] }
     ],
     edge: [
       "โค้ดไม่มีคำว่า import → String Guard คืน [] ทันที ไม่เสียเวลา regex",
-      "alias @/ หาไฟล์จริงไม่เจอ → ใช้ path เดิมเป็น target แล้วให้ resolveImportToFilePath ช่วย (pipeline 446)",
+      "alias @/ หาไฟล์จริงไม่เจอ → ใช้ path เดิมเป็น target แล้วให้ resolveImportToFilePath ช่วย (pipeline 534)",
       "import ซ้ำ 5 ทางในไฟล์เดียว → เก็บ 1 เส้นต่อ target"
     ],
     decisions: [
@@ -103,14 +103,14 @@ const ARCH_LAYERS = [
     files: ["generator"],
     io: "เข้า: files + CodeRelation[] → ออก: FlowNodeItem[] + FlowEdgeItem[] + mermaid",
     steps: [
-      { t: "id ปลอดภัย", d: "sanitizeNodeId แปลง path เป็น id ที่ React Flow ใช้ได้", ref: ["generator", 8] },
-      { t: "สีตามชนิด", d: "COLOR_PALETTE แยกสีต่อ fileType", ref: ["generator", 33] },
-      { t: "backward compat", d: "ถ้า fileType เป็น other ให้เดาจากชื่อ path อีกครั้ง", ref: ["generator", 41] },
-      { t: "ลำดับคอลัมน์", d: "middleware → page → component → action → api → store", ref: ["generator", 59] },
-      { t: "สร้าง node/edge", d: "edge ที่แตะ action จะ animated ให้เห็นทิศทาง", ref: ["generator", 101] },
-      { t: "จัดวางด้วย Dagre", d: "rankdir LR · nodesep 55 · ranksep 170 · margin 60", ref: ["generator", 111] },
-      { t: "กันเส้นซ้ำ", d: "seenRelKeys กัน edge ซ้ำข้ามกันระหว่าง import กับ action", ref: ["pipeline", 450] },
-      { t: "Mermaid", d: "generateMermaidSyntax ทำสำเนาแบบข้อความไว้ส่งออก", ref: ["generator", 165] }
+      { t: "id ปลอดภัย", d: "sanitizeNodeId แปลง path เป็น id ที่ React Flow ใช้ได้", ref: ["generator", 7] },
+      { t: "สีตามชนิด", d: "COLOR_PALETTE แยกสีต่อ fileType", ref: ["generator", 30] },
+      { t: "backward compat", d: "ถ้า fileType เป็น other ให้เดาจากชื่อ path อีกครั้ง", ref: ["generator", 33] },
+      { t: "ลำดับคอลัมน์", d: "middleware → page → component → action → api → store", ref: ["generator", 35] },
+      { t: "สร้าง node/edge", d: "edge ที่แตะ action จะ animated ให้เห็นทิศทาง", ref: ["generator", 40] },
+      { t: "จัดวางด้วย Dagre", d: "rankdir LR · nodesep 55 · ranksep 170 · margin 60", ref: ["generator", 50] },
+      { t: "กันเส้นซ้ำ", d: "seenRelKeys กัน edge ซ้ำข้ามกันระหว่าง import กับ action", ref: ["pipeline", 548] },
+      { t: "Mermaid", d: "generateMermaidSyntax ทำสำเนาแบบข้อความไว้ส่งออก", ref: ["pipeline", 571] }
     ],
     edge: [
       "Dagre จัดวางไม่ได้ → ล้อม try/catch แล้วใช้พิกัด (0,0) ต่อ ไม่ให้ทั้งหน้าจอพัง",
@@ -129,18 +129,18 @@ const ARCH_LAYERS = [
     files: ["pipeline", "route"],
     io: "เข้า: githubUrl, token → ออก: AnalysisResult (nodes, edges, isCached, executionTimeMs)",
     steps: [
-      { t: "ตั้งนาฬิกา", d: "performance.now() บรรทัดแรกของฟังก์ชัน", ref: ["pipeline", 273] },
-      { t: "แกะ URL", d: "เรียก parseGitHubUrl มี fallback ตัดสตริงเอง", ref: ["pipeline", 278] },
-      { t: "Guard", d: "ไม่มี owner/repo → throw พร้อมข้อความชัดเจน", ref: ["pipeline", 293] },
-      { t: "เช็คแคช", d: "pipelineCache.has(url) คืนผลเดิมพร้อม isCached", ref: ["pipeline", 301] },
-      { t: "ยิง Trees API", d: "พร้อม fallback main → master เมื่อได้ 404", ref: ["pipeline", 317] },
-      { t: "กรอง + จำแนก", d: "เรียกงานคน 2 พร้อม catch fallback เอง", ref: ["pipeline", 366] },
-      { t: "ดึงโค้ด 45 ไฟล์", d: "timeout 4 วินาทีต่อไฟล์", ref: ["pipeline", 397] },
-      { t: "แกะความสัมพันธ์", d: "extractImports + extractAction + เติมเส้นเชิงโครงสร้าง", ref: ["pipeline", 444] },
-      { t: "สร้างกราฟ", d: "ส่งต่อให้ generator ของคน 3", ref: ["pipeline", 480] },
-      { t: "สร้าง Mermaid", d: "ข้อความสำเนาไว้ส่งออก", ref: ["pipeline", 500] },
-      { t: "บันทึกแคช + คืนค่า", d: "pipelineCache.set ก่อน return ทุกครั้ง", ref: ["pipeline", 554] },
-      { t: "คุม boundary", d: "route.ts: อ่าน body ตรวจ 400 เรียก ตอบ 200/500", ref: ["route", 9] }
+      { t: "ตั้งนาฬิกา", d: "performance.now() บรรทัดแรกของฟังก์ชัน", ref: ["pipeline", 442] },
+      { t: "แกะ URL", d: "เรียก parseGitHubUrl มี fallback ตัดสตริงเอง", ref: ["pipeline", 460] },
+      { t: "Guard", d: "ไม่มี owner/repo → throw พร้อมข้อความชัดเจน", ref: ["pipeline", 460] },
+      { t: "เช็คแคช", d: "pipelineCache.has(url) คืนผลเดิมพร้อม isCached", ref: ["pipeline", 469] },
+      { t: "ยิง Trees API", d: "พร้อม fallback main → master เมื่อได้ 404", ref: ["pipeline", 481] },
+      { t: "กรอง + จำแนก", d: "เรียกงานคน 2 พร้อม catch fallback เอง", ref: ["pipeline", 489] },
+      { t: "ดึงโค้ด 45 ไฟล์", d: "timeout 4 วินาทีต่อไฟล์", ref: ["pipeline", 521] },
+      { t: "แกะความสัมพันธ์", d: "extractImports + extractAction + เติมเส้นเชิงโครงสร้าง", ref: ["pipeline", 548] },
+      { t: "สร้างกราฟ", d: "ส่งต่อให้ generator ของคน 3", ref: ["pipeline", 541] },
+      { t: "สร้าง Mermaid", d: "ข้อความสำเนาไว้ส่งออก", ref: ["pipeline", 558] },
+      { t: "บันทึกแคช + คืนค่า", d: "pipelineCache.set ก่อน return ทุกครั้ง", ref: ["pipeline", 590] },
+      { t: "คุม boundary", d: "route.ts: อ่าน body ตรวจ 400 เรียก ตอบ 200/500", ref: ["route", 7] }
     ],
     edge: [
       "GitHub ล่ม → 'ไม่สามารถเชื่อมต่อ GitHub ได้ กรุณาตรวจสอบอินเทอร์เน็ตหรือแนบ Token'",
@@ -161,15 +161,20 @@ const ARCH_LAYERS = [
     files: ["page", "flowcanvas", "sidedrawer", "uihelper", "codeviewer", "layout", "types"],
     io: "เข้า: AnalysisResult → ออก: กราฟ + รายละเอียดไฟล์ + ตัวอ่านโค้ด",
     steps: [
-      { t: "รับผล", d: "page.tsx ยิง POST แล้ว setResult(data)", ref: ["page", 119] },
-      { t: "ตรวจ ok", d: "ถ้า !response.ok โยน error พร้อมข้อความจาก API", ref: ["page", 125] },
-      { t: "คำนวณสถิติ", d: "formatRepoStats + calculateHealthScore แปลงตัวเลขเป็นป้าย", ref: ["uihelper", 37] },
-      { t: "ตรวจ URL ก่อนยิง", d: "validateUrlInput เตือนผู้ใช้ก่อนเสียเวลายิง API", ref: ["uihelper", 6] },
-      { t: "วาดกราฟ", d: "FlowCanvas รับ nodes/edges แล้วส่งเข้า React Flow", ref: ["flowcanvas", 1] },
-      { t: "เปิด drawer", d: "คลิก node → SideDrawer เปิดพร้อมไฟล์และบรรทัดที่เกี่ยวข้อง", ref: ["sidedrawer", 1] },
-      { t: "ตัดโค้ดให้พอดี", d: "formatCodeSnippet ตัดที่ maxLines = 300 ไม่ให้หน้าค้าง", ref: ["codeviewer", 62] },
-      { t: "ไฮไลต์โค้ด", d: "highlightCodeWithPrism เลือกภาษาจากนามไฟล์", ref: ["codeviewer", 99] },
-      { t: "แชร์ลิงก์", d: "encodeShareableState เก็บ url + node ลง query string", ref: ["uihelper", 109] },
+      { t: "รับผล", d: "page.tsx ยิง POST แล้ว setResult(data)", ref: ["flowexplorer", 114] },
+      { t: "ตรวจ ok", d: "ถ้า !response.ok โยน error พร้อมข้อความจาก API", ref: ["flowexplorer", 120] },
+      { t: "กรองตามประเภทไฟล์", d: "ปุ่ม ALL / PAGE / COMPONENT / ACTION / STORE กรอง displayedNodes & displayedEdges ผ่าน useMemo", ref: ["flowexplorer", 200] },
+      { t: "แถบปุ่มกรอง (Filter Tabs)", d: "แถบสไตล์ Vercel Monochrome สลับ filterType และนับจำนวนโหนดแต่ละประเภท", ref: ["flowexplorer", 382] },
+      { t: "ค้นหาโหนด (Ctrl+K / '/')", d: "กล่องค้นหาโหนด Node Finder พร้อมคีย์ลัด ค้นหาตามชื่อไฟล์และพาธ แล้ว Pan เลื่อนกล้องไปหาโหนดทันที", ref: ["flowcanvas", 418] },
+      { t: "สืบย้อนความสัมพันธ์ (Trace Flow)", d: "computeTracePath ส่อง Ancestors/Descendants เลือกโหมด 'ทั้งสาย' หรือ '1-Step' ได้", ref: ["flowcanvas", 48] },
+      { t: "ตัวเลือกมุมมอง (MiniMap & ป้ายกำกับ)", d: "ปุ่มไอคอนแผนที่ย่อ MiniMap และปุ่มตั้งค่า (Sliders) ปรับป้ายกำกับเส้น: สมาร์ท / ทั้งหมด / ปิด", ref: ["flowcanvas", 495] },
+      { t: "คำนวณสถิติ & สุขภาพโค้ด", d: "formatRepoStats + calculateHealthScore แปลงตัวเลขเป็นเกรด A/B/C", ref: ["uihelper", 44] },
+      { t: "ตรวจ URL ก่อนยิง", d: "validateUrlInput เตือนผู้ใช้ก่อนเสียเวลายิง API", ref: ["uihelper", 4] },
+      { t: "วาดกราฟ React Flow", d: "FlowCanvas รับ nodes/edges แล้วจัดวางด้วย Dagre", ref: ["flowcanvas", 10] },
+      { t: "เปิด drawer", d: "คลิก node → SideDrawer เปิดพร้อมไฟล์และบรรทัดที่เกี่ยวข้อง", ref: ["sidedrawer", 20] },
+      { t: "ตัดโค้ดให้พอดี", d: "formatCodeSnippet ตัดที่ maxLines = 300 ไม่ให้หน้าค้าง", ref: ["codeviewer", 53] },
+      { t: "ไฮไลต์โค้ด Prism", d: "highlightCodeWithPrism เลือกภาษาจากนามไฟล์", ref: ["codeviewer", 91] },
+      { t: "แชร์ลิงก์", d: "encodeShareableState เก็บ url + node ลง query string", ref: ["uihelper", 63] },
       { t: "ฟอนต์ไทย", d: "IBM Plex Sans Thai ผ่าน next/font + display swap", ref: ["layout", 15] }
     ],
     edge: [
@@ -188,7 +193,7 @@ const ARCH_LAYERS = [
 
 // ---------- สแต็กเลเยอร์ของ UI ตัวนี้เอง (ถ้าอาจารย์ถามว่า layout ทำยังไง) ----------
 const LAYOUT_STACK = [
-  { lvl: 1, name: "app-shell", selector: ".app-shell", role: "CSS Grid 2 คอลัมน์: side-rail + content-col", detail: "กำหนดสัดส่วนทั้งหน้าจอ · ต่ำกว่า 1024px เปลี่ยนเป็นแถวเดียว" },
+  { lvl: 1, name: "app-shell", selector: ".app-shell", role: "CSS Grid 3 คอลัมน์ (จอกว้าง): side-rail + content-col + inspector", detail: "ต่ำกว่า 1280px ยุบเป็น 2 คอลัมน์ และต่ำกว่า 1024px เปลี่ยนเป็นแถวเดียว โดย inspector ย้ายไปเป็น drawer ลอย" },
   { lvl: 2, name: "content-col", selector: ".content-col", role: "Flex column: top-strip + workspace + inspector", detail: "workspace ใช้ min-height:0 เพื่อให้ลูกที่ scroll ภายในบีบได้จริง" },
   { lvl: 3, name: "workspace", selector: ".workspace", role: "position:relative = containing block ของทุก overlay", detail: "เก็บ panes-wrap (ปกติ) และ overlay (z-index 5) ไว้ชั้นเดียวกัน" },
   { lvl: 4, name: "panes-wrap", selector: ".panes-wrap", role: "Grid 1fr 1fr + gap 1px สีเส้นแบ่ง", detail: "ซ้าย = ไฟล์คน 6 · ขวา = โมดูลเพื่อนที่ถูกเรียก" },
@@ -208,9 +213,9 @@ const HIGHLIGHT_SYSTEM = [
 // ---------- วิธีเรนเดอร์: ฟังก์ชันไหนทำอะไร เรียกตามลำดับไหน ----------
 const RENDER_FUNCS = [
   { fn: "initFileMeta()", where: "data-content.js", role: "สร้าง FILE_META 19 รายการแบบ lazy", how: ["ต้องเรียกหลัง data-code.js โหลดเสร็จ ไม่งั้น RAW_* ยังไม่มีค่า", "ถ้าเรียกตอน parse ไฟล์ จะได้ ReferenceError: RAW_PARSER is not defined"], why: "แยกข้อมูลออกจากโค้ดจริง ทำให้สลับไฟล์ในแท็บได้โดยไม่โหลดซ้ำ" },
-  { fn: "buildFileGraph()", where: "app.js", role: "สแกนโค้ด 19 ไฟล์ สร้าง FILE_GRAPH", how: ["pass 1 เก็บชื่อ export ทุกไฟล์ 46 สัญลักษณ์ พร้อมเลขบรรทัด", "pass 2 ทีละบรรทัด หา import / path literal / การเรียกข้ามไฟล์", "เช็ก includes() ก่อน แล้วค่อยยืนยันด้วย regex เพื่อความเร็ว"], why: "ทำครั้งเดียวตอนโหลด 251 edge แล้วใช้ซ้ำได้ทุกครั้งที่คลิก" },
+  { fn: "buildFileGraph()", where: "app.js", role: "สแกนโค้ด 18 ไฟล์ สร้าง FILE_GRAPH", how: ["pass 1 เก็บชื่อ export ทุกไฟล์ 46 สัญลักษณ์ พร้อมเลขบรรทัด", "pass 2 ทีละบรรทัด หา import / path literal / การเรียกข้ามไฟล์", "เช็ก includes() ก่อน แล้วค่อยยืนยันด้วย regex เพื่อความเร็ว"], why: "ทำครั้งเดียวตอนโหลด 251 edge แล้วใช้ซ้ำได้ทุกครั้งที่คลิก" },
   { fn: "renderPane()", where: "app.js", role: "สร้างแถวโค้ด 1 ไฟล์ใน 1 pane", how: ["split newline แล้วข้ามแถวว่างท้ายไฟล์", "แต่ละแถวคือ div.code-row มี id fileKey-row-N", "ใส่ highlightTS เพื่อทำ syntax token", "ผูก click ไปที่ onCodeRowClick ทุกไฟล์"], why: "ใช้ DocumentFragment ต่อครั้ง โหลด 561 บรรทัดรวดเดียว ไม่กระพริบทีละแถว" },
-  { fn: "renderCodePanes()", where: "app.js", role: "วาดแท็บ 19 ไฟล์ + โหลด pane เริ่มต้น", how: ["renderFileTabs สร้างแท็บจาก FILE_META ที่อยู่ pane ตรงกัน", "เรียก renderPane ซ้ายและขวา", "อัปเดต badge เจ้าของไฟล์", "renderInspector สร้างบทวิเคราะห์ใต้จอ"], why: "แยกแท็บออกจากเนื้อโค้ด เปลี่ยนไฟล์ได้โดยไม่ต้องสร้างแท็บใหม่" },
+  { fn: "renderCodePanes()", where: "app.js", role: "วาดแท็บ 18 ไฟล์ + โหลด pane เริ่มต้น", how: ["renderFileTabs สร้างแท็บจาก FILE_META ที่อยู่ pane ตรงกัน", "เรียก renderPane ซ้ายและขวา", "อัปเดต badge เจ้าของไฟล์", "renderInspector สร้างบทวิเคราะห์ใต้จอ"], why: "แยกแท็บออกจากเนื้อโค้ด เปลี่ยนไฟล์ได้โดยไม่ต้องสร้างแท็บใหม่" },
   { fn: "selectStep(i)", where: "app.js", role: "เลือกสเต็ป 1-6 แล้วไฮไลต์ทั้งสอง pane", how: ["renderStepUI วาด step dots และ ribbon", "pipeline ไฮไลต์ช่วง pRange แล้ว scrollToLine", "route ไฮไลต์ 9-37 ถ้าเปิดแท็บนี้", "github ถ้าสเต็ปมี gRange ให้สลับแท็บขวาเป็น github อัตโนมัติ", "เปลี่ยน badge ขวาเป็น Callee"], why: "สเต็ปเป็นแกนกลาง ทุกมุมมองอื่นยึด currentStepIndex เดียวกัน" },
   { fn: "highlightRange()", where: "app.js", role: "ลงคลาสไฮไลต์ลงแถวที่อยู่ในช่วง", how: ["เลือกแถวด้วย id prefix ของไฟล์นั้น", "เพิ่ม has-highlight ที่ container เพื่อ dim ที่เหลือ", "github ได้สีเขียว ไฟล์อื่นได้สีฟ้า", "targetLine ได้คลาสเข้มและขอบ 3px"], why: "id prefix เร็วกว่า data attribute เมื่อมีหลายพันแถว และ id ยังใช้ต่อกับ scrollToLine ได้" },
   { fn: "scrollToLine()", where: "app.js", role: "เลื่อน pane ไปให้เห็นบรรทัดเป้าหมาย", how: ["หาแถวจาก id", "ใช้ offsetTop ลบ 16px", "เรียก scrollTo แบบ smooth"], why: "ทำให้เส้นสำคัญอยู่เหนือขอบบน ไม่ต้องเลื่อนตามเอง" },
@@ -219,6 +224,127 @@ const RENDER_FUNCS = [
   { fn: "renderLineReader()", where: "app.js", role: "วาดตัวอ่าน + รายการไฟล์ที่เกี่ยวข้อง", how: ["แสดงบรรทัดที่กดแบบเต็ม", "แสดงบริบท ±8 บรรทัด", "จัดกลุ่ม เรียกใช้ / ถูกเรียก / ชั้นที่ 2 แล้ว normalize ต่อไฟล์", "แต่ละการ์ดมีปุ่มขยายโค้ดและเปิดใน pane", "ยึดฝั่งตรงข้ามกับไฟล์ที่อ่านเพื่อไม่บังโค้ด"], why: "รวมบรรทัด บริบท และไฟล์ที่เกี่ยวข้องไว้ในการ์ดเดียว" }
 ];
 
+// ---------- ดัชนีฟังก์ชันและฟีเจอร์เด่นฝั่ง UI & Engine (ตอบอาจารย์เจาะจงรายจุด) ----------
+const UI_FEATURES_INDEX = [
+  {
+    category: "ค้นหาและนำทาง (Search & Navigation)",
+    items: [
+      {
+        name: "กล่องค้นหาโหนด (Node Finder)",
+        shortcut: "Ctrl+K หรือ /",
+        file: "flowcanvas",
+        line: 434,
+        desc: "ช่องค้นหาพร้อมแว่นขยาย ค้นหาโหนดแบบเรียลไทม์ตามชื่อไฟล์และ path แสดงผล dropdown พร้อมสีกำกับเลเยอร์",
+        codeSnippet: "placeholder=\"ค้นหาโหนด... (Ctrl+K)\""
+      },
+      {
+        name: "เลื่อนกล้องไปหาโหนด (Pan to Node)",
+        shortcut: "คลิกผลการค้นหา",
+        file: "flowcanvas",
+        line: 357,
+        desc: "ฟังก์ชัน focusAndPanToNode คำนวณพิกัด position.x, y แล้วเรียก setCenter(x, y, { zoom: 1.2, duration: 500 }) ของ React Flow",
+        codeSnippet: "focusAndPanToNode(nodeItem) -> setCenter(pos.x + 130, pos.y + 40, { zoom: 1.2 })"
+      },
+      {
+        name: "คีย์ลัดค้นหา Global Keydown",
+        shortcut: "Ctrl+K, /, Esc",
+        file: "flowcanvas",
+        line: 376,
+        desc: "ตรวจจับคีย์บอร์ดระดับ Window ดักจับ Ctrl+K และ / เพื่อเปิดกล่องค้นหาทันที และ Esc เพื่อล้างโฟกัส",
+        codeSnippet: "if ((e.ctrlKey || e.metaKey) && e.key === 'k') { searchInputRef.current?.focus(); }"
+      }
+    ]
+  },
+  {
+    category: "การกรองตามประเภทไฟล์ (Architecture Filtering)",
+    items: [
+      {
+        name: "ตรรกะกรองโหนด (displayedNodes useMemo)",
+        shortcut: "State: filterType",
+        file: "page",
+        line: 197,
+        desc: "กรองโหนดที่ส่งเข้า FlowCanvas ตามแถบเลือกประเภท เช่น all คืนทั้งหมด, page รวม middleware, action รวม api",
+        codeSnippet: "const displayedNodes = useMemo(() => { if (filterType === 'all') return result.nodes; ... }, [result, filterType]);"
+      },
+      {
+        name: "ตรรกะกรองเส้นเชื่อม (displayedEdges useMemo)",
+        shortcut: "Auto Filter Edges",
+        file: "page",
+        line: 210,
+        desc: "คัดกรองเส้นเชื่อมให้อยู่เฉพาะระหว่างโหนดที่ยังแสดงผลอยู่เท่านั้น ป้องกันเส้นชี้ไปยังโหนดที่ถูกซ่อน",
+        codeSnippet: "result.edges.filter((e) => activeIds.has(e.source) && activeIds.has(e.target));"
+      },
+      {
+        name: "แถบปุ่มกรอง Vercel Monochrome Tabs",
+        shortcut: "ALL, PAGE, COMPONENT, ACTION, STORE",
+        file: "page",
+        line: 402,
+        desc: "ปุ่มสลับประเภทไฟล์ พร้อมตัวเลขนับจำนวนโหนดแบบสด (Live Count Badge) สไตล์ Vercel UI",
+        codeSnippet: "onClick={() => setFilterType('all')} / setFilterType('page') ..."
+      }
+    ]
+  },
+  {
+    category: "การวิเคราะห์เส้นทาง & การแสดงผล (Trace & View Controls)",
+    items: [
+      {
+        name: "สืบย้อนเส้นทางทั้งสาย (Full-Chain Trace)",
+        shortcut: "สวิตช์: ทั้งสาย / 1-Step",
+        file: "flowcanvas",
+        line: 45,
+        desc: "computeTracePath คำนวณโหนดต้นน้ำ (Ancestors) และปลายน้ำ (Descendants) ทำเอฟเฟกต์เรืองแสงและเฟดโหนดอื่น",
+        codeSnippet: "computeTracePath(selectedNodeId, edges, traceMode)"
+      },
+      {
+        name: "ล้างโฟกัสเส้นทาง (Clear Focus)",
+        shortcut: "ปุ่ม 'ล้าง Focus' / Esc",
+        file: "flowcanvas",
+        line: 505,
+        desc: "ปุ่ม Dock 2 เด้งขึ้นมาเมื่อมีโหนดถูกเลือก มีปุ่มล้าง Focus พร้อมสวิตช์เลือกโหมด 'ทั้งสาย' หรือ '1-Step'",
+        codeSnippet: "handleClearFocus() -> setSelectedNodeId(null)"
+      },
+      {
+        name: "ปุ่มเปิดปิด MiniMap",
+        shortcut: "ไอคอนแผนที่ย่อ",
+        file: "flowcanvas",
+        line: 550,
+        desc: "ปุ่มสลับการมองเห็นของ MiniMap ย่อมุมขวาล่างของผืนผ้าใบ",
+        codeSnippet: "onClick={() => setShowMiniMap((prev) => !prev)}"
+      },
+      {
+        name: "ตัวเลือกป้ายกำกับเส้น (Label Settings)",
+        shortcut: "ไอคอน Sliders (ตัวปรับ)",
+        file: "flowcanvas",
+        line: 561,
+        desc: "เมนู Dropdown สลับโหมดป้ายกำกับเส้นเชื่อม: สมาร์ท (ซ่อน boilerplate), ทั้งหมด (โชว์ครบ), ปิด (ซ่อนป้าย)",
+        codeSnippet: "setLabelMode('smart' | 'all' | 'none')"
+      }
+    ]
+  },
+  {
+    category: "แถบส่องโค้ดจริง (Source Code Inspector)",
+    items: [
+      {
+        name: "SideDrawer ดึงโค้ดจริง",
+        shortcut: "คลิกโหนดบนกราฟ",
+        file: "page",
+        line: 32,
+        desc: "handleSelectNode ดึงซอร์สโค้ดดิบจาก GitHub CDN แล้วเปิดแผง SideDrawer จากฝั่งขวา",
+        codeSnippet: "handleSelectNode(path, fileType) -> fetch(rawUrl)"
+      },
+      {
+        name: "ตัดทอนและทำสีโค้ด (Prism Highlighting)",
+        shortcut: "PrismJS + 300 lines limit",
+        file: "codeviewer",
+        line: 62,
+        desc: "formatCodeSnippet ตัดโค้ดไม่เกิน 300 บรรทัด และ highlightCodeWithPrism ลงสี syntax ตามภาษา",
+        codeSnippet: "formatCodeSnippet(code, 300) -> highlightCodeWithPrism(snippet, lang)"
+      }
+    ]
+  }
+];
+
 const ARCH_TOTAL_EDGES = 251;
 const ARCH_TOTAL_SYMBOLS = 46;
 const ARCH_HTML_NOTE = "ไฟล์ portal นี้แยกข้อมูลออกจาก logic: data-code.js เก็บโค้ดจริง · data-content.js เก็บบทเรียน · data-arch.js เก็บสถาปัตยกรรม · app.js มีแต่ render + interaction";
+

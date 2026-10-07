@@ -4,108 +4,107 @@
 // ============================================================
 
 const LOGICAL_STEPS = [
-
   {
     step: 1,
-    title: "1. โหลดโมดูล & สร้างตัวจำผลลัพธ์ (Cache)",
-    subTitle: "Import โมดูล & จอง In-Memory Cache (บรรทัด 1 - 18)",
-    pRange: [1, 18],
-    pTarget: 11,
-    gRange: [1, 2],
-    gTarget: 2,
-    objective: "ดึงเครื่องมือของเพื่อนคนที่ 1, 2, 3 เข้ามาใช้ แล้วสร้างตัวจำ (Cache) ไว้ในแรมของเซิร์ฟเวอร์ เพื่อจำผลงานเก่าไม่ให้ต้องคำนวณซ้ำ",
-    pMechanics: "• บรรทัด 2-5: import ฟังก์ชันจากเพื่อนคนที่ 1 (github.ts), คนที่ 2 (parser.ts), คนที่ 3 (generator.ts) และ Types กลาง\n• บรรทัด 7-11: pipelineCache = new Map() จองพื้นที่แรมเก็บผลลัพธ์ โดยใช้ URL เป็นกุญแจ (Key) ของแต่ละงาน\n• บรรทัด 13-18: clearPipelineCache() คำสั่งล้างแคชทั้งหมด ใช้ตอนรัน Unit Test หรือรีเซ็ตระบบ",
-    rMechanics: "• บรรทัด 2-3: route.ts import NextRequest/NextResponse และฟังก์ชัน runAnalysisPipeline จาก pipeline\n• บรรทัด 9: ประกาศ POST handler รอรับคำขอ HTTP จากหน้าเว็บ (คน 4) เข้าสู่ระบบ",
-    gMechanics: "• บรรทัด 1-2: github.ts import interface ParsedGitHubUrl จาก types เตรียมสัญญาการแลกเปลี่ยนข้อมูล (Contract)",
-    teammateContract: "รวมไฟล์เพื่อน: คนที่ 1 (github.ts), คนที่ 2 (parser.ts), คนที่ 3 (generator.ts) ผ่าน import บรรทัด 2-4",
-    variables: "pipelineCache: Map<string, AnalysisResult> (Key = URL เต็มของคลัง)",
-    pythonAnalogy: "เหมือนเขียน pipeline_cache = {} ใน Python เป็นดิกชันนารีเก็บผลลัพธ์ชั่วคราวไว้ในแรม",
-    defenseTip: "หนูประกาศแคชไว้ตั้งแต่ต้นไฟล์ (บรรทัด 11) เพื่อให้งานที่เคยวิเคราะห์แล้วตอบกลับทันทีในระดับมิลลิวินาที โดยไม่ต้องยิง GitHub API ซ้ำค่ะ"
+    title: "1. โหลดโมดูล, แคช LRU & ความปลอดภัย Token",
+    subTitle: "Import, computeCacheKey & BoundedLRUCache (บรรทัด 1 - 60)",
+    pRange: [1, 60],
+    pTarget: 10,
+    gRange: [1, 13],
+    gTarget: 13,
+    objective: "ดึงเครื่องมือของเพื่อนคนที่ 1-3, สร้าง computeCacheKey (แฮช Token ด้วย SHA-256 แยกข้อมูลส่วนตัว) และ BoundedLRUCache (จำกัด 50 คลัง, อายุ 1 ชม.) ป้องกัน Cache Poisoning และการข้ามสิทธิ์",
+    pMechanics: "• บรรทัด 1: import crypto สำหรับคำนวณแฮชความปลอดภัย\n• บรรทัด 10-14: computeCacheKey() ตรวจสอบ Token ถ้าไม่มีใช้คีย์สาธารณะ (#public) ถ้ามีจะแฮชด้วย SHA-256 16 ตัวอักษร เพื่อแยกพื้นที่แคชไม่ให้ปะปนกับผู้อื่น\n• บรรทัด 27-57: คลาส BoundedLRUCache กำหนด MAX_ENTRIES = 50 และ TTL = 1 ชม. พร้อม LRU Shift\n• บรรทัด 59-60: pipelineCache และ clearPipelineCache()",
+    rMechanics: "• บรรทัด 1-4: route.ts import NextRequest/NextResponse และ runAnalysisPipeline\n• บรรทัด 7: POST handler\n• บรรทัด 24-27: ดักจับ Error 401 ส่ง HTTP 401 Unauthorized กลับไปทันทีเมื่อ Token ไม่ถูกต้อง",
+    gMechanics: "• บรรทัด 1-13: github.ts import และประกาศ interface ParsedGitHubUrl เตรียมสัญญาข้อมูล",
+    teammateContract: "รวมไฟล์เพื่อน: คนที่ 1 (github.ts), คนที่ 2 (parser.ts), คนที่ 3 (generator.ts) และ crypto",
+    variables: "computeCacheKey, pipelineCache: BoundedLRUCache (MAX_ENTRIES = 50, TTL = 1 ชม.)",
+    pythonAnalogy: "เหมือนใช้ hashlib.sha256(token.encode()).hexdigest()[:16] ทำ partition cache key ร่วมกับ LRUCache",
+    defenseTip: "หนูเพิ่ม computeCacheKey (บรรทัด 10) แฮช Token ด้วย SHA-256 เพื่อทำ Cache Partitioning ป้องกันไม่ให้ผู้ใช้คนอื่นเข้าถึงแคชที่มีสิทธิ์ Token พิเศษ และตอบ HTTP 401 ชัดเจนค่ะ"
   },
   {
     step: 2,
     title: "2. เครื่องมือภายใน: แปลง Import เป็น Path จริง + หาความสัมพันธ์จากโครงสร้าง",
-    subTitle: "Helper 2 ตัวที่หนูเขียนเอง (บรรทัด 20 - 259)",
-    pRange: [20, 259],
-    pTarget: 24,
+    subTitle: "Helper 4 ตัวที่หนูเขียนเอง (บรรทัด 63 - 230)",
+    pRange: [63, 230],
+    pTarget: 103,
     gRange: null,
     gTarget: null,
-    objective: "สร้างเครื่องมือเสริม 2 ตัวของ Pipeline: แปลงพาธ import ให้เป็นไฟล์จริง และเดาความเชื่อมโยงจากโครงสร้าง App Router โดยไม่ต้องยิง API เพิ่ม",
-    pMechanics: "• บรรทัด 24-74: resolveImportToFilePath() แปลง '@/store/gameStore' ให้เป็น path จริงด้วย 3 กลยุทธ์: Alias @//~/ (34-43), Relative ./ ../ (46-61) และค้นจากชื่อไฟล์ (64-71)\n• บรรทัด 80-259: inferStructuralRelations() อ่านโครงสร้างโฟลเดอร์ app/ แล้วสร้างเส้นความสัมพันธ์อัตโนมัติ เช่น middleware→root (105-112), layout renders page (134-141), parent→sub-route (164-190), component→page (194-223), component→store (226-240)\n• บรรทัด 86-93: กันเส้นซ้ำด้วย Set ของ Key 'source->target'",
-    rMechanics: "• สเต็ปนี้เป็นการเตรียมเครื่องมือภายใน ยังไม่เกี่ยวกับคำขอที่เข้ามา\n• POST handler (บรรทัด 9) ยังรอรับคำขออยู่",
-    gMechanics: "• สเต็ปนี้ไม่ได้เรียกใช้ github.ts: เครื่องมือทั้งสองตัวทำงานกับรายชื่อไฟล์ในเครื่อง (In-Memory) ล้วน ๆ จึงไม่เปลืองโควตา API",
-    teammateContract: "ไม่มีการเรียกเพื่อนในสเต็ปนี้ — เป็นโค้ดของคน 6 เองทั้งหมด จะถูกใช้ร่วมกับผลงานคนที่ 2 ในสเต็ป 6",
-    variables: "resolveImportToFilePath, inferStructuralRelations, uniqueKeys (Set กันซ้ำ)",
-    pythonAnalogy: "เหมือนเขียน os.path.normpath() + ตาราง mapping ใน Python เพื่อแปลง from store.gameStore import x ให้เป็น path ไฟล์จริง",
-    defenseTip: "จุดขายของหนูคือ inferStructuralRelations ที่แยกความสัมพันธ์จากโครงสร้างโฟลเดอร์ได้เลยโดยไม่ต้องดึงโค้ดทุกไฟล์ ทำให้ประหยัดโควตา API และเร็วขึ้นมากค่ะ"
+    objective: "สร้างเครื่องมือเสริมของ Pipeline: แปลงพาธ import ให้เป็นไฟล์จริง และเดาความเชื่อมโยงจากโครงสร้าง App Router โดยไม่ต้องยิง API เพิ่ม",
+    pMechanics: "• บรรทัด 63: COMMON_EXTENSIONS รายการนามสกุลและ index file\n• บรรทัด 66-74: resolveAliasImport() แปลง \"@/store/gameStore\" หรือ \"~/lib/x\" ให้เป็นพาธจริง\n• บรรทัด 81-99: resolveRelativeImport() แปลง \"./x\" และ \"../x\" เทียบกับไฟล์ต้นทาง\n• บรรทัด 103-127: resolveImportToFilePath() กลยุทธ์ 3 ชั้น: Alias -> Relative -> ค้นหาจากชื่อไฟล์\n• บรรทัด 133-225: inferStructuralRelations() อ่านโครงสร้างโฟลเดอร์ app/ แล้วสร้างเส้นความสัมพันธ์อัตโนมัติ (middleware->root, layout renders page, parent->sub-route)\n• บรรทัด 139: กันเส้นซ้ำด้วย Set ของ Key \"source->target\"",
+    rMechanics: "• เครื่องมือภายในเตรียมพร้อมรอใช้งาน",
+    gMechanics: "• ทำงานกับ In-Memory รายชื่อไฟล์ล้วน ๆ ไม่เสียโควตา API",
+    teammateContract: "โค้ดของคน 6 เองทั้งหมด พร้อมนำไปใช้งานร่วมกับผลงานคนที่ 2 ในสเต็ป 6",
+    variables: "resolveImportToFilePath, resolveAliasImport, resolveRelativeImport, inferStructuralRelations",
+    pythonAnalogy: "เหมือน os.path.normpath() + mapping dictionary แปลง relative import เป็น canonical path",
+    defenseTip: "จุดเด่นคือ inferStructuralRelations (บรรทัด 133) ช่วยสร้างกราฟโครงสร้างได้ทันทีแม้ไม่ได้โหลดโค้ดดิบทุกไฟล์ค่ะ"
   },
   {
     step: 3,
     title: "3. แกะและตรวจ URL จากผู้ใช้",
-    subTitle: "เช็กความถูกต้อง & ดึง owner/repo (บรรทัด 261 - 298)",
-    pRange: [261, 298],
-    pTarget: 278,
-    gRange: [4, 52],
-    gTarget: 7,
+    subTitle: "เช็กความถูกต้อง & ดึง owner/repo (บรรทัด 439 - 466)",
+    pRange: [439, 466],
+    pTarget: 447,
+    gRange: [15, 41],
+    gTarget: 15,
     objective: "รับ URL ที่ผู้ใช้กรอก แล้วส่งให้เพื่อนคนที่ 1 แกะว่าใครเป็นเจ้าของ (owner) และชื่อคลังอะไร (repo) ถ้าไม่ใช่ลิงก์ github.com ให้ปัดทิ้งทันที",
-    pMechanics: "• บรรทัด 273: เริ่มจับเวลา startTime = performance.now() เพื่อวัดความเร็วรวมตอนท้าย\n• บรรทัด 277-291: ส่ง URL ให้ parseGitHubUrl() ของคนที่ 1 ถ้าโมดูลมีปัญหา บล็อก catch จะตัดสตริงสำรองให้เอง (Fallback Guard)\n• บรรทัด 293-295: Guard Clause ถ้าไม่ได้ owner/repo โยน Error 'URL ต้องมาจาก github.com เท่านั้น'\n• บรรทัด 297-298: แยกค่า owner, repo และตั้ง activeBranch เริ่มที่ 'main'",
-    rMechanics: "• บรรทัด 12-13: await req.json() อ่าน body ที่หน้าเว็บ (คน 4) ส่งมา { url, token }\n• บรรทัด 16-21: ถ้าไม่มี url ตอบ HTTP 400 กลับไปทันที\n• บรรทัด 24: ส่ง url + token เข้า runAnalysisPipeline()",
-    gMechanics: "• บรรทัด 7-52: parseGitHubUrl() ตรวจค่าว่าง (9-11), เติม https:// ให้เอง (16-18), เช็ค hostname ลงท้าย github.com (23-25), แยก segment (29-34), ตัด .git (40-42) แล้วคืน { owner, repo } (48)",
-    teammateContract: "ส่งสตริง URL ให้เพื่อนคนที่ 1 (github.ts บรรทัด 7-52) -> ได้รับกลับมาเป็น { owner, repo }",
-    variables: "startTime, parsed: { owner, repo }, activeBranch = 'main'",
-    pythonAnalogy: "เหมือนใช้ urllib.parse แยก URL แล้วเช็ก if not owner: raise ValueError('ต้องเป็นลิงก์ GitHub เท่านั้น')",
-    defenseTip: "ส่วนนี้เป็นด่านคัดกรองด่านแรก หนูมีทั้งตัวแกะ URL ของคนที่ 1 และตัวตัดสตริงสำรองที่บรรทัด 279-291 ทำให้ระบบไม่พังแม้โมดูลของเพื่อนมีบั๊กค่ะ"
+    pMechanics: "• บรรทัด 442: เริ่มจับเวลา startTime = performance.now()\n• บรรทัด 447: ส่ง URL ให้ parseGitHubUrl() ของคนที่ 1\n• บรรทัด 448-458: Fallback Guard ตัดสตริงสำรองเมื่อเกิดข้อผิดพลาด\n• บรรทัด 460-462: Guard Clause ถ้าไม่ใช่ github.com โยน Error ทันที\n• บรรทัด 464-466: เตรียม owner, repo, activeBranch และ effectiveToken",
+    rMechanics: "• บรรทัด 9-10: req.json() อ่าน body { url, token }\n• บรรทัด 12-17: Guard Clause ตรวจสอบ URL ถ้าว่างตอบ HTTP 400\n• บรรทัด 19: ส่งเข้า await runAnalysisPipeline(url, token)",
+    gMechanics: "• บรรทัด 15-41: parseGitHubUrl() ตรวจโดเมน github.com ตัด .git และแยก owner, repo, branch",
+    teammateContract: "ส่ง URL ให้คนที่ 1 (github.ts) -> ได้ { owner, repo, branch }",
+    variables: "startTime, parsed: { owner, repo, branch }, effectiveToken",
+    pythonAnalogy: "เหมือน urllib.parse แยก URL แล้วตรวจโดเมน whitelist",
+    defenseTip: "มี Fallback Guard บรรทัด 448-458 ช่วยตัดสตริงสำรองทำให้ระบบไม่พังแม้โมดูลเพื่อนเกิด Error ค่ะ"
   },
   {
     step: 4,
-    title: "4. เช็กแคชเดิม (ถ้าเคยทำแล้วตอบทันที)",
-    subTitle: "Cache Hit: ตอบกลับในระดับมิลลิวินาที (บรรทัด 299 - 308)",
-    pRange: [299, 308],
-    pTarget: 301,
+    title: "4. เช็กแคชแยกสิทธิ์ (Token-Partitioned Cache)",
+    subTitle: "Cache Hit ด้วย Token Hash (บรรทัด 467 - 475)",
+    pRange: [467, 475],
+    pTarget: 467,
     gRange: null,
     gTarget: null,
-    objective: "แอบดูในแรมก่อนว่า URL นี้เคยวิเคราะห์แล้วหรือยัง ถ้าเคยให้หยิบผลเก่าส่งกลับทันที ไม่ต้องยิง GitHub API ซ้ำ",
-    pMechanics: "• บรรทัด 301: pipelineCache.has(githubUrl) เช็คว่าเคยจำงานนี้ไว้หรือยัง\n• บรรทัด 302: pipelineCache.get() ดึงผลเก่าออกมา\n• บรรทัด 303-307: คืนผลเดิมพร้อมแนบ isCached: true และ executionTimeMs ที่น้อยมาก",
-    rMechanics: "• บรรทัด 24: await runAnalysisPipeline() ได้ผลจากแคชเกือบทันที\n• บรรทัด 27: NextResponse.json(result, { status: 200 }) ส่งขึ้นจอผู้ใช้ทันที",
-    gMechanics: "• สเต็ปนี้ไม่ได้เรียก github.ts: การตอบจากแคชช่วยประหยัดโควตา GitHub API (จำกัด 60 ครั้ง/ชม. ถ้าไม่มี Token)",
-    teammateContract: "ไม่ต้องรบกวนเพื่อนเลย — ตอบจากแคชตรง ๆ แล้วจบการทำงาน",
-    variables: "cachedResult, isCached: true",
-    pythonAnalogy: "เหมือน if url in cache: return cache[url] หรือใช้ @functools.lru_cache ตกแต่งฟังก์ชัน",
-    defenseTip: "ตรงนี้คือหัวใจด้าน Performance ค่ะ งานซ้ำตอบเร็วขึ้นหลายเท่าตัวและไม่เปลืองโควตา API ของ GitHub เลย"
+    objective: "ตรวจสอบแคชด้วย cacheKey ที่แฮช Token แล้ว ถ้าเคยมีผลลัพธ์ภายใต้สิทธิ์เดียวกัน คืนค่าทันทีในระดับ <10ms",
+    pMechanics: "• บรรทัด 467: const cacheKey = computeCacheKey(githubUrl, effectiveToken) สร้างคีย์เฉพาะสิทธิ์\n• บรรทัด 469: pipelineCache.has(cacheKey) ตรวจสอบว่ามีแคชหรือไม่\n• บรรทัด 470-474: pipelineCache.get(cacheKey) ดึงผลลัพธ์เดิม คืนค่าพร้อม isCached: true และ executionTimeMs ล่าสุด",
+    rMechanics: "• บรรทัด 19-20: รับผลสำเร็จตอบ NextResponse.json 200 ทันที",
+    gMechanics: "• ไม่ต้องยิง GitHub API เลย ประหยัดโควต้า 100%",
+    teammateContract: "ไม่ต้องเรียกเพื่อน ตอบจากหน่วยความจำทันที",
+    variables: "cacheKey: string (url + #tokenHash), cachedResult",
+    pythonAnalogy: "เหมือนใช้ cache_key = f'{url}#{sha256(token)}' ในการ lookup Redis/Dict",
+    defenseTip: "ตรงนี้หนูใช้ cacheKey ที่คำนวณจาก Token Hash ทำให้คำขอแบบใช้ Token กับไม่ใช้ Token ไม่ปนเปื้อนกันค่ะ"
   },
   {
     step: 5,
-    title: "5. ดึงโครงสร้างโปรเจกต์จาก GitHub API",
-    subTitle: "fetch Trees API + Fallback branch master (บรรทัด 309 - 361)",
-    pRange: [309, 361],
-    pTarget: 317,
-    gRange: [54, 81],
-    gTarget: 57,
-    objective: "ยิงคำขอไปที่ GitHub Trees API เพื่อขอรายชื่อไฟล์ทั้งโปรเจกต์ในครั้งเดียว พร้อมระบบสำรองเมื่อคลังไม่ได้ใช้ branch main",
-    pMechanics: "• บรรทัด 312-314: ถ้าเป็น Unit Test ใช้ mockTreeData ข้ามการยิงเน็ต\n• บรรทัด 317-320: fetch(buildGitHubApiUrl(owner, repo, branch), { headers: buildGitHubHeaders(token) }) — ประกอบจากเครื่องมือของคนที่ 1\n• บรรทัด 323-332: ถ้า 404 ที่ branch main ให้ลอง master อัตโนมัติ (Fallback)\n• บรรทัด 334-346: จัดการ Error 404 (ไม่พบคลัง), 403 (Rate Limit แนะนำใส่ Token)\n• บรรทัด 348-351: แกะ json.tree เก็บใน treeData\n• บรรทัด 352-360: catch โยนข้อความที่อ่านง่าย ไม่ปล่อย stack ดิบ",
-    rMechanics: "• บรรทัด 24: ส่ง token ที่ผู้ใช้กรอกต่อให้ Pipeline เพื่อขยายโควตา API จาก 60 เป็น 5,000 ครั้ง/ชม.",
-    gMechanics: "• บรรทัด 57-60: buildGitHubApiUrl() ประกอบลิงก์ Trees API พร้อม ?recursive=1 ได้ทุกไฟล์ในครั้งเดียว\n• บรรทัด 66-81: buildGitHubHeaders() แนบ User-Agent และ Authorization: Bearer ถ้ามี Token",
-    teammateContract: "เรียกใช้ buildGitHubApiUrl (บรรทัด 57-60) และ buildGitHubHeaders (บรรทัด 66-81) ของเพื่อนคนที่ 1",
-    variables: "treeData (รายชื่อไฟล์ทั้งโปรเจกต์), activeBranch",
-    pythonAnalogy: "เหมือน requests.get(api_url, headers=headers) แล้วเช็ก if response.status_code == 403: raise",
-    defenseTip: "หนูยิง API แบบ recursive=1 รอบเดียวได้ไฟล์ทั้งโปรเจกต์ และมี Fallback main→master อัตโนมัติ (บรรทัด 323-332) ทำให้รองรับทั้งคลังเก่าและใหม่ค่ะ"
+    title: "5. ดึงโครงสร้างโปรเจกต์ & ตรวจสอบความถูกต้องของ Token",
+    subTitle: "fetchGitHubTree + ตรวจจับ 401 Unauthorized (บรรทัด 477 - 485)",
+    pRange: [477, 485],
+    pTarget: 481,
+    gRange: [44, 60],
+    gTarget: 44,
+    objective: "ยิงคำขอไปที่ GitHub Trees API พร้อมตรวจจับสถานะ 401 Bad credentials ทันทีเมื่อผู้ใช้ใส่ Token ผิด และมี Fallback 2 ชั้น",
+    pMechanics: "• บรรทัด 481: await fetchGitHubTree(owner, repo, activeBranch, effectiveToken)\n• บรรทัด 299-373: การทำงานใน fetchGitHubTree\n• บรรทัด 348-350: ตรวจจับ response.status === 401 โยน Error ชัดเจน '❌ GitHub Token ไม่ถูกต้อง (401 Bad credentials)'\n• บรรทัด 351-356: ตรวจจับ 404 และ 403 Rate Limit\n• บรรทัด 323-333: Fallback main -> master และ Fallback default_branch",
+    rMechanics: "• บรรทัด 24-27: route.ts จับ Error 401 แล้วส่ง HTTP 401 กลับไปที่หน้าเว็บทันที ไม่ส่ง 500 คลุมเครือ",
+    gMechanics: "• บรรทัด 44-60: buildGitHubApiUrl และ buildGitHubHeaders แนบ Bearer Token",
+    teammateContract: "เรียกใช้ buildGitHubApiUrl และ buildGitHubHeaders ของคนที่ 1",
+    variables: "treeData, activeBranch, status 401 check",
+    pythonAnalogy: "เหมือน if res.status_code == 401: raise AuthError('Bad credentials')",
+    defenseTip: "หนูตรวจจับ HTTP 401 โดยเฉพาะ (บรรทัด 348) เพื่อแจ้งเตือนผู้ใช้ตรงจุดเมื่อ Token ผิดพลาด และส่งต่อเป็น HTTP 401 สู่หน้าบ้านค่ะ"
   },
   {
     step: 6,
-    title: "6. กรองไฟล์ สกัดความสัมพันธ์ วาดกราฟ และส่งผลลัพธ์",
-    subTitle: "ทีมคน 2 + คน 3 + แพ็กเกจผลลัพธ์ (บรรทัด 362 - 561)",
-    pRange: [362, 561],
-    pTarget: 554,
+    title: "6. กรองไฟล์ สกัดความสัมพันธ์ วาดกราฟ และบันทึกแคช",
+    subTitle: "ทีมคน 2 + คน 3 + บันทึกแคช LRU (บรรทัด 487 - 592)",
+    pRange: [487, 592],
+    pTarget: 590,
     gRange: null,
     gTarget: null,
-    objective: "คัดเฉพาะไฟล์โค้ดที่สำคัญ แกะความเชื่อมโยงจากโค้ดจริง ส่งให้คนที่ 3 วาดกราฟ แล้วแพ็กเป็น AnalysisResult บันทึกแคชและส่งกลับหน้าจอ",
-    pMechanics: "• บรรทัด 365-377: filterTreeFiles(treeData, 500) ของคนที่ 2 กรองโฟลเดอร์ขยะ จำกัดไม่เกิน 500 ไฟล์ (กันโหลดหนัก)\n• บรรทัด 379-394: detectNextFileType() จำแนกประเภทไฟล์ page/action/middleware/store/component\n• บรรทัด 403-438: ดึงโค้ดจริงจาก raw.githubusercontent.com เฉพาะ 45 ไฟล์แรก พร้อม timeout 4 วินาที (บรรทัด 413)\n• บรรทัด 443-499: แกะ import/action triggers แล้ว resolve เป็น path จริงด้วยเครื่องมือของเรา\n• บรรทัด 504-506: ถ้าไม่มีความสัมพันธ์เลย ใช้ inferStructuralRelations() เดาจากโครงสร้าง App Router\n• บรรทัด 508-537: คนที่ 3 วาดกราฟ buildFlowElements() + เขียน Mermaid\n• บรรทัด 539-556: รวม finalResult, บันทึกแคช (554) แล้ว return (556)",
-    rMechanics: "• บรรทัด 27: รับผลสำเร็จส่ง NextResponse 200 กลับหน้าเว็บ\n• บรรทัด 28-36: ถ้า Pipeline โยน Error ใด ๆ แปลงเป็น HTTP 500 พร้อมข้อความที่เข้าใจง่าย",
-    gMechanics: "• สเต็ปนี้ไม่ได้เรียก github.ts โดยตรง: การดึงโค้ดดิบใช้ลิงก์ raw.githubusercontent.com ที่ประกอบเองในบรรทัด 408 (เพื่อไม่เปลืองโควตา API หลัก)",
-    teammateContract: "คนที่ 2 (parser.ts กรอง+แกะโค้ด) -> คนที่ 3 (generator.ts วาดกราฟ+Mermaid) -> ส่งผลต่อคนที่ 4 (หน้าจอ) และคนที่ 5 (Inspector)",
-    variables: "filteredItems, relations, flowElements, mermaidSyntax, finalResult",
-    pythonAnalogy: "เหมือนท่อประมวลผล: กรองไฟล์ → แกะ import → วาดกราฟ → รีเทิร์นดิกชันนารีก้อนใหญ่ก้อนเดียวจบ",
-    defenseTip: "หนูคุมจังหวะการทำงานทั้งหมดตรงนี้ค่ะ ทุกโมดูลของเพื่อนถูกครอบด้วย try-catch พร้อมโค้ดสำรอง ทำให้แม้เพื่อนส่งงานไม่ครบ ระบบก็ยังวิเคราะห์ออกมาได้ และแนบเวลา executionTimeMs ให้เห็นประสิทธิภาพจริงค่ะ"
+    objective: "คัดกรองไฟล์โค้ด ดึงโค้ดจริง 45 ไฟล์แรกแบบขนาน สกัด imports/actions ให้คนที่ 3 วาดกราฟ Dagre และบันทึกลงแคชแยกสิทธิ์",
+    pMechanics: "• บรรทัด 489-502: filterTreeFiles(treeData, 500) และ detectNextFileType()\n• บรรทัด 521-542: ดึงโค้ดจริง 45 ไฟล์แรกแบบขนานด้วย Promise.all พร้อม timeout 4s (บรรทัด 530)\n• บรรทัด 548-553: extractRelationsFromContent() สกัด imports/actions\n• บรรทัด 555-557: inferStructuralRelations() สกัดเส้นโครงสร้างเสริม\n• บรรทัด 558: buildFlowElements() ส่งเข้า Dagre Layout\n• บรรทัด 576-588: รวม finalResult\n• บรรทัด 590: pipelineCache.set(cacheKey, finalResult) บันทึกลงแคช LRU แยกสิทธิ์",
+    rMechanics: "• บรรทัด 20: ตอบกลับ NextResponse.json(result, 200)",
+    gMechanics: "• ดึงโค้ดดิบผ่าน raw.githubusercontent.com พร้อมแนบ Authorization header ถ้ามี token",
+    teammateContract: "คนที่ 2 (parser) -> คนที่ 3 (generator) -> บันทึกแคชคน 6 -> ส่งผลลัพธ์ให้คน 4 และ 5",
+    variables: "filteredItems, relations, flowElements, finalResult",
+    pythonAnalogy: "เหมือนท่อประมวลผลสมบูรณ์: กรอง -> แกะโค้ด -> วาดกราฟ -> เซฟแคช -> รีเทิร์น JSON",
+    defenseTip: "ระบบบันทึกแคชด้วย cacheKey (บรรทัด 590) ที่แยกตาม SHA-256 Token Hash ทำให้มั่นใจได้เรื่องความปลอดภัยและการใช้ซ้ำค่ะ"
   }
 ];
 
@@ -117,9 +116,9 @@ function initFileMeta() {
   { key: "route", name: "route.ts", raw: RAW_ROUTE, pane: "left", icon: "TS", role: "(API Route)", badge: "คน 6: API Route", bc: "src / app / api / analyze / <strong>route.ts</strong>", tech: "Next.js App Router (POST)" },
   { key: "parser", name: "parser.ts", raw: RAW_PARSER, pane: "left", icon: "TS", role: "(คน 2)", badge: "คน 2: Parser Engine", bc: "src / lib / <strong>parser.ts</strong>", tech: "TypeScript 5.x" },
   { key: "generator", name: "generator.ts", raw: RAW_GENERATOR, pane: "left", icon: "TS", role: "(คน 3)", badge: "คน 3: Flow Generator", bc: "src / lib / <strong>generator.ts</strong>", tech: "TypeScript + Dagre" },
-  { key: "test6", name: "6_integration.test.ts", raw: RAW_TEST6, pane: "left", icon: "TS", role: "(เทสคน 6)", badge: "คน 6: Integration Test", bc: "src / tests / <strong>6_integration_pipeline.test.ts</strong>", tech: "Vitest + Mock" },
-  { key: "github", name: "github.ts", raw: RAW_GITHUB, pane: "right", icon: "TS", role: "(คน 1)", badge: "คน 1: GitHub Service", bc: "src / lib / <strong>github.ts</strong>", tech: "GitHub REST v3" },
-  { key: "page", name: "page.tsx", raw: RAW_PAGE, pane: "right", icon: "TS", role: "(คน 4)", badge: "คน 4: Dashboard UI", bc: "src / app / <strong>page.tsx</strong>", tech: "React Client Component" },
+  { key: "github", name: "github.ts", raw: RAW_GITHUB, pane: "left", icon: "TS", role: "(คน 1)", badge: "คน 1: GitHub Service", bc: "src / lib / <strong>github.ts</strong>", tech: "GitHub REST v3" },
+  { key: "page", name: "page.tsx", raw: RAW_PAGE, pane: "right", icon: "TS", role: "(คน 4)", badge: "คน 4: Dashboard UI", bc: "src / app / <strong>page.tsx</strong>", tech: "React Server Component (Thin Wrapper)" },
+  { key: "flowexplorer", name: "FlowExplorer.tsx", raw: RAW_FLOWEXPLORER, pane: "right", icon: "TS", role: "(คน 4)", badge: "คน 4: State Orchestrator", bc: "src / components / <strong>FlowExplorer.tsx</strong>", tech: "React Client Component (State Engine)" },
   { key: "uihelper", name: "ui-helper.ts", raw: RAW_UIHELPER, pane: "right", icon: "TS", role: "(คน 4)", badge: "คน 4: UI Helper & URL Guard", bc: "src / lib / <strong>ui-helper.ts</strong>", tech: "Validation & Share Link" },
   { key: "flowcanvas", name: "FlowCanvas.tsx", raw: RAW_FLOWCANVAS, pane: "right", icon: "TS", role: "(คน 3)", badge: "คน 3: Flow Canvas (Visualizer)", bc: "src / components / <strong>FlowCanvas.tsx</strong>", tech: "React Flow + Dagre" },
   { key: "sidedrawer", name: "SideDrawer.tsx", raw: RAW_SIDEDRAWER, pane: "right", icon: "TS", role: "(คน 5)", badge: "คน 5: Side Drawer (Inspector)", bc: "src / components / <strong>SideDrawer.tsx</strong>", tech: "React Inspector UI" },
@@ -127,94 +126,91 @@ function initFileMeta() {
   { key: "layout", name: "layout.tsx", raw: RAW_LAYOUT, pane: "right", icon: "TS", role: "(Shared)", badge: "Shared: Root Layout", bc: "src / app / <strong>layout.tsx</strong>", tech: "Next.js App Router" },
   { key: "types", name: "types/index.ts", raw: RAW_TYPES, pane: "right", icon: "TS", role: "(Shared)", badge: "Shared: สัญญาข้อมูลกลาง", bc: "src / types / <strong>index.ts</strong>", tech: "TypeScript Interfaces" },
   { key: "globals", name: "globals.css", raw: RAW_GLOBALS, pane: "right", icon: "CSS", role: "(Shared)", badge: "Shared: ธีม CSS", bc: "src / app / <strong>globals.css</strong>", tech: "CSS Variables Theme" },
-  { key: "test1", name: "1_github.test.ts", raw: RAW_TEST1, pane: "right", icon: "TS", role: "(เทสคน 1)", badge: "เทสคน 1: GitHub Service", bc: "src / tests / <strong>1_github.test.ts</strong>", tech: "Vitest" },
-  { key: "test2", name: "2_parser.test.ts", raw: RAW_TEST2, pane: "right", icon: "TS", role: "(เทสคน 2)", badge: "เทสคน 2: Parser", bc: "src / tests / <strong>2_parser.test.ts</strong>", tech: "Vitest" },
-  { key: "test3", name: "3_generator.test.ts", raw: RAW_TEST3, pane: "right", icon: "TS", role: "(เทสคน 3)", badge: "เทสคน 3: Generator", bc: "src / tests / <strong>3_generator.test.ts</strong>", tech: "Vitest" },
-  { key: "test4", name: "4_frontend_ui.test.ts", raw: RAW_TEST4, pane: "right", icon: "TS", role: "(เทสคน 4)", badge: "เทสคน 4: Frontend UI", bc: "src / tests / <strong>4_frontend_ui.test.ts</strong>", tech: "Vitest" },
-  { key: "test5", name: "5_side_drawer.test.ts", raw: RAW_TEST5, pane: "right", icon: "TS", role: "(เทสคน 5)", badge: "เทสคน 5: Side Drawer", bc: "src / tests / <strong>5_side_drawer.test.ts</strong>", tech: "Vitest" }
+  { key: "test1", name: "github.test.ts", raw: RAW_TEST1, pane: "right", icon: "TS", role: "(เทสคน 1)", badge: "เทสคน 1: GitHub Service", bc: "src / lib / <strong>github.test.ts</strong>", tech: "Vitest · 10 เคส" },
+  { key: "test2", name: "parser.test.ts", raw: RAW_TEST2, pane: "right", icon: "TS", role: "(เทสคน 2)", badge: "เทสคน 2: Parser", bc: "src / lib / <strong>parser.test.ts</strong>", tech: "Vitest · 20 เคส" },
+  { key: "test3", name: "generator.test.ts", raw: RAW_TEST3, pane: "right", icon: "TS", role: "(เทสคน 3)", badge: "เทสคน 3: Generator", bc: "src / lib / <strong>generator.test.ts</strong>", tech: "Vitest · 9 เคส" },
+  { key: "test4", name: "ui-helper.test.ts", raw: RAW_TEST4, pane: "right", icon: "TS", role: "(เทสคน 4)", badge: "เทสคน 4: UI Helper", bc: "src / lib / <strong>ui-helper.test.ts</strong>", tech: "Vitest · 12 เคส" }
 ];
 }
 
 const SIM_STEPS = [
-  { n: 1, actor: "คน 4", color: "#58a6ff", title: "ผู้ใช้กรอก URL บนหน้าเว็บ Dashboard", detail: "ผู้ใช้พิมพ์ลิงก์ GitHub และกดปุ่มวิเคราะห์บนหน้า Dashboard ที่เพื่อนคนที่ 4 สร้างไว้ — จุดเริ่มต้นของทุกอย่าง", fileRef: "src/app/page.tsx" },
-  { n: 2, actor: "คน 4 → คน 6", color: "#58a6ff", title: "ยิงคำขอ POST /api/analyze", detail: "หน้าเว็บส่ง fetch แบบ POST พร้อม JSON body { url, token } เข้าหา Endpoint ของคนที่ 6 ที่วางรอไว้", fileRef: "page.tsx → /api/analyze" },
-  { n: 3, actor: "คน 6", color: "#ff7b72", title: "route.ts รับและตรวจคำขอ", detail: "await req.json() อ่าน body (บรรทัด 12-13) แล้ว Guard Clause เช็คว่ามี url หรือไม่ ถ้าไม่มีตอบ HTTP 400 กลับไปทันที (บรรทัด 16-21)", fileRef: "route.ts:12-21" },
-  { n: 4, actor: "คน 6", color: "#ff7b72", title: "ส่งต่อเข้า Core Pipeline", detail: "route เรียก await runAnalysisPipeline(url, token) มอบงานให้ตัวคุมจังหวะกลางของคนที่ 6 ลงมือประสานงานทุกโมดูล", fileRef: "route.ts:24" },
-  { n: 5, actor: "คน 1", color: "#3fb950", title: "แกะ URL → owner/repo", detail: "parseGitHubUrl() ตรวจโดเมน github.com ตัด .git และแยก segment ได้ { owner, repo } พร้อม Fallback ตัดสตริงสำรองของคนที่ 6 (บรรทัด 278-291)", fileRef: "github.ts:7-52" },
-  { n: 6, actor: "คน 6", color: "#ff7b72", title: "เช็กแคชก่อนลงมือ", detail: "pipelineCache.has(githubUrl) — ถ้าเคยวิเคราะห์แล้ว คืนผลเก่าพร้อม isCached: true จบในระดับมิลลิวินาที ไม่ต้องยิง API ซ้ำ (บรรทัด 301-308)", fileRef: "pipeline.ts:301-308" },
-  { n: 7, actor: "คน 1 + 6", color: "#3fb950", title: "ยิง GitHub Trees API", detail: "buildGitHubApiUrl + buildGitHubHeaders แล้ว fetch แบบ ?recursive=1 ได้ไฟล์ทั้งโปรเจกต์รอบเดียว มี Fallback main→master อัตโนมัติ (บรรทัด 317-332)", fileRef: "pipeline.ts:317-332 / github.ts:57-81" },
-  { n: 8, actor: "คน 2", color: "#bc8cff", title: "กรองและจำแนกไฟล์", detail: "filterTreeFiles(treeData, 500) ตัดโฟลเดอร์ขยะ แล้ว detectNextFileType() จำแนกประเภท page/action/middleware/store/component (บรรทัด 365-394)", fileRef: "pipeline.ts:365-394 / parser.ts" },
-  { n: 9, actor: "คน 2 + 3", color: "#d29922", title: "แกะความสัมพันธ์และวาดกราฟ", detail: "ดึงโค้ดจริงจาก raw CDN (45 ไฟล์แรก, timeout 4s) แกะ imports/actions เสริมด้วย inferStructuralRelations แล้วให้คนที่ 3 สร้างโหนด/เส้น + Mermaid (บรรทัด 397-537)", fileRef: "pipeline.ts:397-537 / generator.ts" },
-  { n: 10, actor: "คน 6 → คน 4", color: "#ff7b72", title: "แพ็กผลลัพธ์ส่งกลับหน้าจอ", detail: "รวม AnalysisResult พร้อม executionTimeMs, บันทึกลงแคช (บรรทัด 554), route ตอบ NextResponse 200 ให้ Dashboard ขึ้นกราฟทันที", fileRef: "pipeline.ts:539-556 / route.ts:27" }
+  { n: 1, actor: "คน 4", color: "#58a6ff", title: "ผู้ใช้กรอก URL และ Token บนหน้า Dashboard", detail: "ผู้ใช้พิมพ์ลิงก์ GitHub และแนบ Personal Access Token (ถ้ามี) บนหน้า Dashboard (FlowExplorer.tsx) พร้อม Guard ตรวจค่าว่าง", fileRef: "src/components/FlowExplorer.tsx:168" },
+  { n: 2, actor: "คน 4 → คน 6", color: "#58a6ff", title: "ยิงคำขอ POST /api/analyze พร้อม Token", detail: "executeAnalysis() ส่ง fetch แบบ POST พร้อม body { url, token: token?.trim() } และดักจับ Error 401 Bad credentials โดยเฉพาะ", fileRef: "FlowExplorer.tsx:115-128" },
+  { n: 3, actor: "คน 6", color: "#ff7b72", title: "route.ts รับคำขอและตรวจความถูกต้อง", detail: "await req.json() อ่าน body แล้ว Guard Clause เช็ค url หากเกิดข้อผิดพลาด 401 จะส่ง HTTP 401 Unauthorized กลับไปทันที", fileRef: "route.ts:7-27" },
+  { n: 4, actor: "คน 6", color: "#ff7b72", title: "ส่งต่อเข้า runAnalysisPipeline", detail: "route เรียก await runAnalysisPipeline(url, token) มอบหมายงานให้ Orchestrator หลักลงมือประสานงาน", fileRef: "route.ts:19" },
+  { n: 5, actor: "คน 1", color: "#3fb950", title: "แกะ URL → owner/repo", detail: "parseGitHubUrl() ตรวจโดเมน github.com ตัด .git และแยก segment ได้ { owner, repo, branch } พร้อม Fallback Guard (บรรทัด 447-458)", fileRef: "github.ts:15-41" },
+  { n: 6, actor: "คน 6", color: "#ff7b72", title: "เช็กแคชแยกสิทธิ์ (SHA-256 Partition)", detail: "computeCacheKey(githubUrl, effectiveToken) คำนวณคีย์แยกตาม Token Hash ถ้าตรงจะคืนผลลัพธ์ <10ms ป้องกันการปนเปื้อนข้อมูล (บรรทัด 467-474)", fileRef: "pipeline.ts:10, 467-474" },
+  { n: 7, actor: "คน 1 + 6", color: "#3fb950", title: "ยิง GitHub Trees API & ตรวจ Token", detail: "fetchGitHubTree() ยิง Trees API ถ้า Token ผิดจะโยน Error 401 ทันที พร้อมระบบ Fallback 2 ชั้น main->master->default_branch (บรรทัด 348 / 481)", fileRef: "pipeline.ts:348, 481 / github.ts:44-60" },
+  { n: 8, actor: "คน 2", color: "#bc8cff", title: "กรองและจำแนกไฟล์", detail: "filterTreeFiles(treeData, 500) ตัดโฟลเดอร์ขยะ แล้ว detectNextFileType() จำแนกประเภท page/action/middleware/store/component (บรรทัด 489-512)", fileRef: "pipeline.ts:489-512 / parser.ts:101-160" },
+  { n: 9, actor: "คน 2 + 3", color: "#d29922", title: "แกะความสัมพันธ์และวาดกราฟ Dagre", detail: "ดึงโค้ดจริง 45 ไฟล์แรกแบบขนาน แกะ imports/actions เสริมด้วย inferStructuralRelations แล้วส่งให้คนที่ 3 วาดกราฟ Dagre (บรรทัด 521-564)", fileRef: "pipeline.ts:521-564 / generator.ts:89-130" },
+  { n: 10, actor: "คน 6 → คน 4", color: "#ff7b72", title: "บันทึกแคชแยกสิทธิ์ & ส่งผลลัพธ์", detail: "บันทึกลงแคช LRU ด้วย cacheKey (บรรทัด 590) route ตอบ NextResponse.json 200 (บรรทัด 20) ให้ Dashboard แสดงกราฟทันที", fileRef: "pipeline.ts:576-591 / route.ts:20" }
 ];
 
-// SIM_JUMPS: จังหวะซิมูแลเตอร์ -> ช่วงโค้ดจริงที่เกี่ยวข้อง (ไฟล์ + บรรทัด จากโปรเจกต์จริง)
-// file/line = จุดเป้าหมายหลัก · snippets = ช่วงโค้ดที่แสดง inline ในซิมูเลเตอร์ (start/end ครอบเป้าหมาย)
 const SIM_JUMPS = [
   {
-    file: "page", line: 262,
+    file: "flowexplorer", line: 168,
     snippets: [
-      { file: "page", line: 262, start: 259, end: 268, note: "ฟอร์มบนหน้า Dashboard — onSubmit ผูกกับ handleSubmit ของคนที่ 4" }
+      { file: "flowexplorer", line: 168, start: 168, end: 171, note: "ฟอร์มบนหน้า Dashboard — onSubmit ผูกกับ handleSubmit ของคนที่ 4" }
     ]
   },
   {
-    file: "page", line: 119,
+    file: "flowexplorer", line: 115,
     snippets: [
-      { file: "page", line: 119, start: 114, end: 123, note: "fetch() แบบ POST ไป /api/analyze พร้อม body { url, token }" }
+      { file: "flowexplorer", line: 115, start: 114, end: 135, note: "executeAnalysis — fetch() POST /api/analyze พร้อมดัก Error 401 Bad credentials ชัดเจน" }
     ]
   },
   {
-    file: "route", line: 12,
+    file: "route", line: 9,
     snippets: [
-      { file: "route", line: 12, start: 11, end: 21, note: "อ่าน body จาก request แล้วเข้า Guard Clause ตรวจ url ก่อน" }
+      { file: "route", line: 9, start: 7, end: 27, note: "POST handler — ตรวจ URL และดักส่ง HTTP 401 เมื่อ Token ไม่ถูกต้อง" }
     ]
   },
   {
-    file: "route", line: 24,
+    file: "route", line: 19,
     snippets: [
-      { file: "route", line: 24, start: 22, end: 27, note: "ส่งต่อเข้า runAnalysisPipeline — หัวใจงานของคนที่ 6" }
+      { file: "route", line: 19, start: 18, end: 20, note: "ส่งต่อเข้า runAnalysisPipeline — หัวใจงานของคนที่ 6" }
     ]
   },
   {
-    file: "github", line: 7,
+    file: "github", line: 15,
     snippets: [
-      { file: "github", line: 7, start: 7, end: 22, note: "parseGitHubUrl() — แกะโดเมน github.com ออกเป็น { owner, repo }" }
+      { file: "github", line: 15, start: 15, end: 41, note: "parseGitHubUrl() — แกะโดเมน github.com ออกเป็น { owner, repo } + อ่านชื่อ branch" }
     ]
   },
   {
-    file: "pipeline", line: 301,
+    file: "pipeline", line: 467,
     snippets: [
-      { file: "pipeline", line: 301, start: 299, end: 308, note: "เช็ค In-Memory Cache — ถ้ามีผลแล้วคืนค่าเดิม isCached: true จบในระดับมิลลิวินาที" }
+      { file: "pipeline", line: 10, start: 10, end: 14, note: "computeCacheKey — แฮช Token ด้วย SHA-256 ทำ Partition Cache ป้องกันรั่วไหล" },
+      { file: "pipeline", line: 467, start: 466, end: 475, note: "เช็ค In-Memory BoundedLRUCache ด้วย cacheKey แยกตามสิทธิ์" }
     ]
   },
   {
-    file: "pipeline", line: 317,
+    file: "pipeline", line: 481,
     snippets: [
-      { file: "pipeline", line: 317, start: 316, end: 322, note: "ยิง GitHub Trees API แบบ ?recursive=1 ได้ไฟล์ทั้งโปรเจกต์รอบเดียว" },
-      { file: "github", line: 57, start: 57, end: 70, note: "buildGitHubApiUrl + buildGitHubHeaders ของคนที่ 1 ประกอบ URL และแนบ Token" }
+      { file: "pipeline", line: 348, start: 345, end: 358, note: "ตรวจจับ HTTP 401 Bad credentials ใน fetchGitHubTree" },
+      { file: "pipeline", line: 481, start: 477, end: 485, note: "เรียก fetchGitHubTree พร้อมระบบ Fallback 2 ชั้น" }
     ]
   },
   {
-    file: "pipeline", line: 366,
+    file: "parser", line: 101,
     snippets: [
-      { file: "pipeline", line: 366, start: 364, end: 367, note: "เรียก filterTreeFiles และมี catch fallback ไว้กัน pipeline พัง" },
-      { file: "parser", line: 62, start: 62, end: 68, note: "ตัวแกนจริงของคนที่ 2: ตัดโฟลเดอร์ขยะ + จำกัดจำนวนไฟล์" },
-      { file: "parser", line: 119, start: 119, end: 124, note: "detectNextFileType — จำแนก page/action/middleware/store/component" }
+      { file: "pipeline", line: 489, start: 487, end: 512, note: "เรียก filterTreeFiles และ detectNextFileType เพื่อคัดแยกไฟล์" },
+      { file: "parser", line: 101, start: 101, end: 124, note: "ตัวแกนจริงของคนที่ 2: ตัดโฟลเดอร์ขยะ + จำกัดจำนวนไฟล์" },
+      { file: "parser", line: 129, start: 129, end: 160, note: "detectNextFileType — จำแนกประเภทไฟล์ App Router" }
     ]
   },
   {
-    file: "pipeline", line: 444,
+    file: "pipeline", line: 548,
     snippets: [
-      { file: "pipeline", line: 444, start: 442, end: 449, note: "ดึงคำสั่ง import จริงจากโค้ดดิบ แล้วผูกเป้าหมายเข้ากับไฟล์จริง" },
-      { file: "generator", line: 65, start: 65, end: 72, note: "buildFlowElements — สร้าง node/edge แล้วจัดวางด้วย Dagre" },
-      { file: "generator", line: 165, start: 165, end: 172, note: "generateMermaidSyntax — แปลงความสัมพันธ์เป็นกราฟ Mermaid" }
+      { file: "pipeline", line: 548, start: 545, end: 560, note: "ดึงคำสั่ง import จริงจากโค้ดดิบ แล้วผูกเป้าหมายเข้ากับไฟล์จริง" },
+      { file: "generator", line: 89, start: 89, end: 130, note: "buildFlowElements — สร้าง node/edge แล้วจัดวางด้วย Dagre" }
     ]
   },
   {
-    file: "pipeline", line: 554,
+    file: "pipeline", line: 590,
     snippets: [
-      { file: "pipeline", line: 554, start: 546, end: 556, note: "แพ็ก AnalysisResult พร้อมเวลา แล้วบันทึกลงแคชก่อนคืนค่า" },
-      { file: "route", line: 27, start: 26, end: 27, note: "ตอบ NextResponse.json(result, 200) กลับหน้า Dashboard" }
+      { file: "pipeline", line: 590, start: 576, end: 592, note: "บันทึกผลลัพธ์ลงแคช LRU ด้วย cacheKey แยกสิทธิ์" },
+      { file: "route", line: 20, start: 19, end: 28, note: "ตอบ NextResponse.json(result, 200) กลับหน้า Dashboard" }
     ]
   }
 ];
@@ -229,18 +225,18 @@ const CICD_SECTIONS = [
   {
     title: "Job test: เตรียมสนามทดสอบ",
     badge: "ci.yml บรรทัด 9-25",
-    desc: "รันบนเครื่อง ubuntu-latest: checkout โค้ดด้วย actions/checkout@v4, ติดตั้ง Node.js 20 พร้อมแคช npm, และ npm ci ติดตั้ง dependency ตาม lock file แบบพอดีเป๊ะ",
-    code: "jobs:\n  test:\n    name: Run Unit Tests\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 20\n          cache: 'npm'\n      - name: Install Dependencies\n        run: npm ci"
+    desc: "รันบนเครื่อง ubuntu-latest: job ชื่อ 'Run Unit Tests and Build' เริ่มจาก checkout โค้ดด้วย actions/checkout@v4, ติดตั้ง Node.js 20 พร้อมแคช npm แล้ว npm ci เพื่อติดตั้ง dependency ตาม lock file แบบพอดีเป๊ะ",
+    code: "jobs:\n  test:\n    name: Run Unit Tests and Build\n    runs-on: ubuntu-latest\n\n    steps:\n      - name: Checkout Code\n        uses: actions/checkout@v4\n\n      - name: Setup Node.js\n        uses: actions/setup-node@v4\n        with:\n          node-version: 20\n          cache: 'npm'\n\n      - name: Install Dependencies\n        run: npm ci"
   },
   {
-    title: "Targeted Test: อ่านชื่อ Branch ด้วย Regex",
-    badge: "ci.yml บรรทัด 27-38",
-    desc: "ไส้เดือนของทีม 6 คน: ถ้า branch ชื่อ feat/person-X จะรันเทสเฉพาะของคน X + Integration Test ของคน 6 ประหยัดเวลาไม่ต้องรันเทสทั้งโปรเจกต์ แต่ถ้าเป็น main จะรันเต็มทุกตัว",
-    code: "REF_NAME=\"${{ github.head_ref || github.ref_name }}\"\nif [[ \"$REF_NAME\" =~ feat/person-([1-6]) ]]; then\n  PERSON=\"${BASH_REMATCH[1]}\"\n  echo \"Running targeted tests for Person $PERSON...\"\n  npx vitest run src/tests/${PERSON}_*.test.ts \\\n     src/tests/6_integration_pipeline.test.ts\nelse\n  echo \"Running full test suite for main...\"\n  npm test\nfi"
+    title: "Run Unit Tests: ด่านบังคับให้เทสต์ผ่านก่อน",
+    badge: "ci.yml บรรทัด 27-28",
+    desc: "ขั้นนี้สั่ง npm test ซึ่งรัน Vitest ทั้ง 4 ไฟล์ (src/lib/github.test.ts, parser.test.ts, generator.test.ts, ui-helper.test.ts) รวม 51 เทสต์ — ใครแก้โค้ดจนเทสต์ใดล้ม PR จะขึ้นกากบาททันที ยังไม่ทัน merge เข้า main",
+    code: "- name: Run Unit Tests\n  run: npm test"
   },
   {
     title: "Build Check: ประตูสุดท้ายก่อนรับโค้ด",
-    badge: "ci.yml บรรทัด 40-41",
+    badge: "ci.yml บรรทัด 30-31",
     desc: "สุดท้ายสั่ง npm run build — ถ้า TypeScript หรือ Next.js คอมไพล์ไม่ผ่าน CI จะขึ้นสถานะแดงทันที ป้องกันโค้ดพังขึ้น main",
     code: "- name: Run Next.js Build\n  run: npm run build"
   },
@@ -251,9 +247,9 @@ const CICD_SECTIONS = [
     code: "FROM node:20-alpine AS base\nWORKDIR /app\nCOPY package.json package-lock.json ./\nRUN npm ci\nCOPY . .\nRUN npm run build\nEXPOSE 3000\nENV PORT=3000\nENV NODE_ENV=production\nCMD [\"npm\", \"start\"]"
   },
   {
-    title: "ทำไมสถาปัตยกรรมนี้ถึงเวิร์กกับทีม 6 คน",
+    title: "สรุปเจตนา: ทำไม CI ชุดนี้ถึงพอ",
     badge: "สรุปเจตนา",
-    desc: "ทุกคน push งานบน branch feat/person-X ของตัวเอง → CI จับชื่อ branch ด้วย Regex แล้วรันเทสเฉพาะของคนนั้น + Integration ของคน 6 → ผ่านค่อย merge เข้า main ทำให้งานไม่ทับกัน รู้ทันทีว่าใครทำอะไรพัง และประหยัดเวลารันเทสมหาศาล",
+    desc: "ทุกคน push งานบน branch ของตัวเองแล้วเปิด PR เข้า main → CI รันสองด่านที่จำเป็นที่สุด: npm test (เทสต์ 51 เคสจาก 4 ไฟล์ใน src/lib) และ npm run build (คอมไพล์ทั้งโปรเจกต์ด้วย TypeScript + Next.js) ผ่านทั้งคู่แล้วจึง merge ได้ ทำให้ไม่มีโค้ดที่ทำเทสต์หรือ build พังหลุดขึ้น main",
     code: null
   }
 ];
@@ -263,13 +259,13 @@ const REDTEAM_ITEMS = [
     icon: "⏱️",
     title: "GitHub API Rate Limit",
     risk: "GitHub จำกัด 60 ครั้ง/ชม. ต่อ IP ถ้าไม่มี Token — ผู้ใช้เยอะเมื่อไหร่ ระบบตายก่อนพัง",
-    fix: "แคช In-Memory (บรรทัด 301) ตอบงานซ้ำโดยไม่ยิง API + รับ Token จากผู้ใช้ขยายเป็น 5,000/ชม. + inferStructuralRelations สร้างกราฟจากโครงสร้างโฟลเดอร์โดยไม่ต้องดึงโค้ดทุกไฟล์"
+    fix: "แคช In-Memory (บรรทัด 446) ตอบงานซ้ำโดยไม่ยิง API + รับ Token จากผู้ใช้ขยายเป็น 5,000/ชม. + inferStructuralRelations สร้างกราฟจากโครงสร้างโฟลเดอร์โดยไม่ต้องดึงโค้ดทุกไฟล์"
   },
   {
     icon: "🌊",
     title: "DoS ด้วยคลังขนาดยักษ์",
     risk: "ถ้าผู้ใช้วิเคราะห์ repo หลักแสนไฟล์ เซิร์ฟเวอร์จะโหลดหนักจนล่มทั้ง Memory และ Network",
-    fix: "filterTreeFiles(treeData, 500) จำกัด 500 ไฟล์ (บรรทัด 366) และดึงเนื้อโค้ดแค่ 45 ไฟล์แรก พร้อม AbortSignal.timeout(4000) ตัดการรอเมื่อเน็ตช้า (บรรทัด 405, 413)"
+    fix: "filterTreeFiles(treeData, 500) จำกัด 500 ไฟล์ (บรรทัด 468) และดึงเนื้อโค้ดแค่ 45 ไฟล์แรก พร้อม AbortSignal.timeout(4000) ตัดการรอเมื่อเน็ตช้า (บรรทัด 501, 507)"
   },
   {
     icon: "🧠",
@@ -281,7 +277,7 @@ const REDTEAM_ITEMS = [
     icon: "🎯",
     title: "SSRF / URL แปลกปลอม",
     risk: "ถ้ารับ URL อะไรก็ได้ ผู้ไม่หวังดีอาจชี้ระบบให้ไปยิง API ภายในเครือข่าย (Server-Side Request Forgery)",
-    fix: "parseGitHubUrl บังคับ hostname ลงท้าย github.com เท่านั้น (github.ts 23-25) + Guard Clause ตรวจซ้ำใน pipeline (บรรทัด 293-295) และ URL ปลายทางประกอบจาก owner/repo ที่ผ่านการแกะแล้วเท่านั้น"
+    fix: "parseGitHubUrl บังคับ hostname ให้เป็น github.com ตรงตัวด้วยการเทียบ hostname (github.ts 34-37) + Guard Clause ตรวจซ้ำใน pipeline (บรรทัด 434-436) และ URL ปลายทางประกอบจาก owner/repo ที่ผ่านการแกะแล้วเท่านั้น"
   },
   {
     icon: "🔑",
@@ -312,11 +308,11 @@ const QNA_ITEMS = [
   },
   {
     q: "ถ้าคลังที่วิเคราะห์ไม่ได้ใช้ branch main จะเกิดอะไรขึ้น?",
-    a: "ระบบจะเจอ 404 แล้ว Fallback ไปลอง branch master อัตโนมัติ (บรรทัด 323-332) ถ้าเจอใช้ตัวนั้นต่อและบันทึก activeBranch ไว้ในผลลัพธ์ ถ้าไม่เจอทั้งคู่จะโยน Error ชี้ชัดว่าไม่พบคลังหรือ branch เพื่อให้ผู้ใช้เช็คลิงก์ได้ทันที"
+    a: "ระบบจะเจอ 404 แล้ว Fallback ไปลอง branch master อัตโนมัติ (บรรทัด 281-290) ถ้าเจอใช้ตัวนั้นต่อและบันทึก activeBranch ไว้ในผลลัพธ์ ถ้าไม่เจอทั้งคู่จะโยน Error ชี้ชัดว่าไม่พบคลังหรือ branch เพื่อให้ผู้ใช้เช็คลิงก์ได้ทันที"
   },
   {
     q: "หนูวัดผลว่า Pipeline ของตัวเองทำงานดีแค่ไหนยังไง?",
-    a: "แนบ executionTimeMs คำนวณจาก performance.now() ตั้งแต่บรรทัด 273 ถึงตอนสร้างผลลัพธ์ (550) + แฟล็ก isCached บอกว่าเป็นงานจากแคชหรืองานใหม่ + มีเทสชุด 6_integration_pipeline.test.ts รันบน CI ทุกครั้งที่ push เพื่อยืนยันว่าการเชื่อมต่อทุกโมดูลยังครบถ้วน"
+    a: "แนบ executionTimeMs คำนวณจาก performance.now() ตั้งแต่บรรทัด 418 ถึงตอนสร้างผลลัพธ์ (577) + แฟล็ก isCached บอกว่าเป็นงานจากแคชหรืองานใหม่ + เทสต์ทั้ง 4 ไฟล์ใน src/lib รวม 51 เคสรันบน CI ทุกครั้งที่ push เพื่อยืนยันว่าการเชื่อมต่อทุกโมดูลยังครบถ้วน"
   }
 ];
 
@@ -325,7 +321,7 @@ const QUIZ_QUESTIONS = [
     q: "ตัวแปร pipelineCache ใน pipeline.ts เก็บข้อมูลในรูปแบบใด?",
     options: ["Array ของ string", "Map โดยใช้ URL เป็น Key และ AnalysisResult เป็น Value", "JSON string ที่เก็บลง localStorage", "Object เดียวเขียนทับกันไปมา"],
     answer: 1,
-    explain: "บรรทัด 11: pipelineCache = new Map<string, AnalysisResult>() — ใช้ URL เป็นกุญแจเพื่อหยิบผลเก่ากลับมาได้เร็วระดับ O(1)"
+    explain: "บรรทัด 23: pipelineCache = new Map<string, AnalysisResult>() — ใช้ URL เป็นกุญแจเพื่อหยิบผลเก่ากลับมาได้เร็วระดับ O(1)"
   },
   {
     q: "ถ้าผู้ใช้กดวิเคราะห์โดยไม่กรอก URL ระบบตอบ HTTP Status อะไร?",
@@ -343,13 +339,13 @@ const QUIZ_QUESTIONS = [
     q: "พารามิเตอร์ ?recursive=1 ใน GitHub Trees API มีความหมายว่าอะไร?",
     options: ["ยิง API ซ้ำ 2 รอบเพื่อความแม่นยำ", "ได้รายชื่อไฟล์ทุกโฟลเดอร์ย่อยทั้งโปรเจกต์ในครั้งเดียว", "ลบไฟล์ที่ซ้ำกันออกจากผลลัพธ์", "บังคับใช้ HTTPS เท่านั้น"],
     answer: 1,
-    explain: "github.ts บรรทัด 59: ต่อท้ายลิงก์ด้วย ?recursive=1 เพื่อขอ tree ทั้งหมดแบบเวียนเกิด (recursive) ประหยัดการยิง API ทีละโฟลเดอร์"
+    explain: "github.ts บรรทัด 57: ต่อท้ายลิงก์ด้วย ?recursive=1 เพื่อขอ tree ทั้งหมดแบบเวียนเกิด (recursive) ประหยัดการยิง API ทีละโฟลเดอร์"
   },
   {
     q: "ถ้าคลังเป้าหมายใช้ branch 'master' แทน 'main' ระบบทำอย่างไร?",
     options: ["โยน Error ทันทีให้ผู้ใช้แก้ URL", "ลองสร้าง branch main ให้อัตโนมัติ", "รอให้ผู้ใช้กดซ้ำจนสำเร็จ", "เจอ 404 แล้วลอง master อัตโนมัติแล้ววิเคราะห์ต่อ"],
     answer: 3,
-    explain: "pipeline.ts บรรทัด 323-332: เมื่อตอบ 404 ที่ branch main จะ fetch ซ้ำด้วย master ถ้าสำเร็จเปลี่ยน activeBranch เป็น 'master' แล้วทำงานต่อโดยผู้ใช้ไม่ต้องทำอะไร"
+    explain: "pipeline.ts บรรทัด 281-290: เมื่อตอบ 404 ที่ branch main จะ fetch ซ้ำด้วย master ถ้าสำเร็จเปลี่ยน activeBranch เป็น 'master' แล้วทำงานต่อโดยผู้ใช้ไม่ต้องทำอะไร"
   }
 ];
 
@@ -362,123 +358,117 @@ const QNA_JUMPS = [
 ];
 
 // ============================================================
-// FILE_GUIDES — บทวิเคราะห์รายไฟล์ครบทั้ง 19 ไฟล์ (แสดงใน Inspector ด้านล่าง)
+// FILE_GUIDES — บทวิเคราะห์รายไฟล์ครบทั้ง 18 ไฟล์ (แสดงใน Inspector ด้านล่าง)
 // mechanics ใช้รูปแบบ "• บรรทัด X-Y: ..." เพื่อให้ formatMechanicsLines() เน้นเลขบรรทัดได้
 // ============================================================
 
 const FILE_GUIDES = {
   pipeline: {
     role: "ตัวคุมจังหวะกลาง (Orchestrator) — ประสานงานทุกโมดูลตั้งแต่รับ URL จนส่งกราฟกลับหน้าจอ",
-    mechanics: "• บรรทัด 2-5: import เครื่องมือของคน 1 (github), คน 2 (parser), คน 3 (generator) + Types กลาง\n• บรรทัด 7-11: pipelineCache = new Map() จองแคชในแรม ใช้ URL เป็น Key\n• บรรทัด 13-18: clearPipelineCache() ล้างแคชทั้งหมด ใช้ตอนรันเทส/รีเซ็ตระบบ\n• บรรทัด 20-74: resolveImportToFilePath() แปลง import เป็น path จริง 3 กลยุทธ์ (Alias 34-43, Relative 46-61, ค้นจากชื่อไฟล์ 64-71)\n• บรรทัด 80-259: inferStructuralRelations() เดาความสัมพันธ์จากโครงสร้าง App Router (middleware→root 105-112, layout renders page 134-141, parent→sub-route 164-190, component→page 194-223, component→store 226-240) กันเส้นซ้ำด้วย Set ที่ 86-93\n• บรรทัด 266-561: runAnalysisPipeline() หัวใจหลัก — จับเวลา 273, แกะ URL พร้อม Fallback Guard 277-291, กัน URL ปลอม 293-295, เช็กแคช 301-308, ยิง Trees API + Fallback main→master 317-332, จัดการ 404/403 334-346, กรองไฟล์ 365-377, ดึงโค้ดจริง 45 ไฟล์ timeout 4s 403-438, resolve ความสัมพันธ์ 443-499, วาดกราฟ 508-537, แพ็กผล + บันทึกแคช 539-556",
-    links: "เรียกใช้: คน 1 (parseGitHubUrl, buildGitHubApiUrl, buildGitHubHeaders) · คน 2 (filterTreeFiles, detectNextFileType, extractImportsFromCode, extractActionTriggers) · คน 3 (buildFlowElements, generateMermaidSyntax) — ถูกเรียกโดย route.ts บรรทัด 24",
+    mechanics: "• บรรทัด 15-18: import เครื่องมือของคน 1 (github), คน 2 (parser), คน 3 (generator) + Types กลาง\n• บรรทัด 20-23: pipelineCache = new Map() จองแคชในแรม ใช้ URL เป็น Key\n• บรรทัด 25-30: clearPipelineCache() ล้างแคชทั้งหมด ใช้ตอนรันเทส/รีเซ็ตระบบ\n• บรรทัด 32-95: เครื่องมือแปลง import เป็นพาธไฟล์จริง — COMMON_EXTENSIONS (32), resolveAliasImport (35-46) สำหรับ @/ ~/, resolveRelativeImport (48-66) สำหรับ ./ ../ และ resolveImportToFilePath (68-95) ตัวคุมกลยุทธ์\n• บรรทัด 97-264: inferStructuralRelations() เดาความสัมพันธ์จากโครงสร้าง App Router (middleware->root, layout renders page, parent->sub-route, component->page, component->store) พร้อมกันเส้นซ้ำด้วย Set ใน addRelation (103-110)\n• บรรทัด 266-343: fetchGitHubTree() ยิง Trees API, Fallback main->master (281-290) และถาม default_branch จาก Repo API เมื่อยัง 404 (294-327) แล้วคืน { treeData, activeBranch } ที่ 330-333\n• บรรทัด 345-406: extractRelationsFromContent() แกะ import/action จากเนื้อโค้ดจริงแล้ว resolve เป็นพาธด้วยเครื่องมือด้านบน\n• บรรทัด 412-581: runAnalysisPipeline() หัวใจหลัก — จับเวลา 418, แกะ URL พร้อม Fallback Guard 421-432, กัน URL ปลอม 434-436, อ่าน GITHUB_TOKEN จาก env เป็นตัวสำรอง 441-443, เช็กแคช 446-452, ดึงโครงสร้าง 454-463, กรองไฟล์ 467-478, ดึงโค้ดจริง 45 ไฟล์ timeout 4s 499-525, แกะความสัมพันธ์ 527-533, วาดกราฟ 536-563, แพ็กผล + บันทึกแคช 566-581",
+    links: "เรียกใช้: คน 1 (parseGitHubUrl, buildGitHubApiUrl, buildGitHubHeaders) · คน 2 (filterTreeFiles, detectNextFileType, extractImportsFromCode, extractActionTriggers) · คน 3 (buildFlowElements, generateMermaidSyntax) — ถูกเรียกโดย route.ts บรรทัด 68",
     defense: "หนูออกแบบให้ pipeline เป็นจุดเชื่อมเดียวของทุกโมดูล ทุกการเรียกเพื่อนครอบด้วย try-catch พร้อมโค้ดสำรอง และแนบ executionTimeMs ให้เห็นประสิทธิภาพจริงทุกครั้งค่ะ"
   },
   route: {
     role: "ประตูรับคำขอ HTTP (POST /api/analyze) — แปลงคำขอจากหน้าเว็บเป็นการเรียก Pipeline",
-    mechanics: "• บรรทัด 1-6: import NextRequest/NextResponse และ runAnalysisPipeline จาก pipeline\n• บรรทัด 9: ประกาศ POST handler รอรับคำขอจากหน้าเว็บ (คน 4)\n• บรรทัด 12-13: await req.json() อ่าน body { url, token }\n• บรรทัด 16-21: Guard Clause — ถ้าไม่มี url ตอบ HTTP 400 กลับทันที\n• บรรทัด 24: ส่ง url + token เข้า runAnalysisPipeline()\n• บรรทัด 27: ตอบ NextResponse 200 พร้อมผลวิเคราะห์\n• บรรทัด 28-36: catch ทุก Error แปลงเป็น HTTP 500 พร้อมข้อความควบคุมไว้ ไม่รั่ว stack trace",
+    mechanics: "• บรรทัด 1-3: import NextRequest/NextResponse และ runAnalysisPipeline จาก pipeline\n• บรรทัด 9: ประกาศ POST handler รอรับคำขอจากหน้าเว็บ (คน 4)\n• บรรทัด 12-13: await req.json() อ่าน body { url, token }\n• บรรทัด 16-21: Guard Clause — ถ้าไม่มี url ตอบ HTTP 400 กลับทันที\n• บรรทัด 24: ส่ง url + token เข้า runAnalysisPipeline()\n• บรรทัด 27: ตอบ NextResponse 200 พร้อมผลวิเคราะห์\n• บรรทัด 28-36: catch ทุก Error แปลงเป็น HTTP 500 พร้อมข้อความควบคุมไว้ ไม่รั่ว stack trace",
     links: "รับคำขอจาก page.tsx (fetch POST) → เรียก pipeline.ts — เป็นหน้าด่านเดียวที่โลกภายนอกติดต่อ",
     defense: "route ของหนูบางแค่ 37 บรรทัดเพราะตัดสินใจอะไรไม่เองเลย แค่ตรวจความถูกต้องเบื้องต้นแล้วส่งต่อให้ Pipeline ทำงานตามหน้าที่เดียวชัดเจนค่ะ"
   },
   github: {
     role: "ผู้เชี่ยวชาญ GitHub API (คน 1) — แกะ URL ประกอบลิงก์และ Headers ทุกชนิด",
-    mechanics: "• บรรทัด 1-2: import ParsedGitHubUrl จาก types (สัญญาข้อมูลกลาง)\n• บรรทัด 7-52: parseGitHubUrl() ตรวจค่าว่าง 9-11, เติม https:// ให้เอง 16-18, เช็ค hostname ลงท้าย github.com 23-25, แยก segment 29-34, ตัด .git 40-42 แล้วคืน { owner, repo } ที่ 48\n• บรรทัด 57-60: buildGitHubApiUrl() ประกอบลิงก์ Trees API พร้อม ?recursive=1 ได้ทุกไฟล์ในครั้งเดียว\n• บรรทัด 66-81: buildGitHubHeaders() แนบ User-Agent เสมอ และ Authorization: Bearer ที่ 76 เมื่อมี Token\n• บรรทัด 86-101: buildGitHubRawUrl() ลิงก์ดึงโค้ดดิบสำหรับ Side Inspector (กันสลับพารามิเตอร์ filePath/branch)\n• บรรทัด 103-106: buildGitHubBlobUrl() ลิงก์เปิดดูไฟล์บนเว็บ GitHub",
-    links: "ถูกเรียกโดย: pipeline.ts (แกะ URL, ประกอบ API) และ page.tsx (buildGitHubRawUrl/BlobUrl ตอนเปิด Drawer)",
-    defense: "ฟังก์ชันของหนูเป็น Pure Function ทดสอบง่าย เทสคลอบคลุม 22 เคสรวมกรณี URL ปลอมและ Token มีเว้นวรรค ทำให้ด่านแรกของระบบแน่นหนาค่ะ"
+    mechanics: "• บรรทัด 13: import ParsedGitHubUrl จาก types (สัญญาข้อมูลกลาง)\n• บรรทัด 19-23: parseBranchFromSegments() อ่านชื่อ branch จาก URL รูปแบบ /tree/<branch> หรือ /blob/<branch>\n• บรรทัด 25-51: parseGitHubUrl() ตรวจค่าว่าง (26-28), เติม https:// ให้เอง (31), เทียบ hostname แบบตรงตัวจึงกัน evilgithub.com ได้ (34-37), แยก segment (39-40), ตัด .git (45) แล้วคืน { owner, repo, branch } ที่ 47\n• บรรทัด 56-58: buildGitHubApiUrl() ประกอบลิงก์ Trees API พร้อม ?recursive=1 ได้ทุกไฟล์ในครั้งเดียว\n• บรรทัด 63-73: buildGitHubHeaders() แนบ User-Agent เสมอ และ Authorization: Bearer (68-70) เมื่อมี Token\n• บรรทัด 78-89: buildGitHubRawUrl() ลิงก์ดึงโค้ดดิบสำหรับ Side Inspector (กันสลับพารามิเตอร์ filePath/branch)\n• บรรทัด 94-96: buildGitHubBlobUrl() ลิงก์เปิดดูไฟล์บนเว็บ GitHub",
+    links: "ถูกเรียกโดย: pipeline.ts (แกะ URL, ประกอบ API) และ FlowExplorer.tsx (buildGitHubRawUrl/BlobUrl ตอนเปิด Drawer)",
+    defense: "ฟังก์ชันของหนูเป็น Pure Function ทดสอบง่าย มี github.test.ts ครอบ 10 เคส รวมกรณี hostname ปลอมอย่าง evilgithub.com และ Token มีเว้นวรรค ทำให้ด่านแรกของระบบแน่นหนาค่ะ"
   },
   parser: {
     role: "เครื่องกรองและแกะความสัมพันธ์จากโค้ด (คน 2) — คัดไฟล์ขยะ จำแนกเลเยอร์ แกะ import/action",
-    mechanics: "• บรรทัด 4-19: BLACKLIST_FOLDERS รายชื่อ 16 โฟลเดอร์ขยะ (node_modules, .next, dist, tests ฯลฯ)\n• บรรทัด 24-46: BLACKLIST_FILES ชุดไฟล์ config/lockfile ที่ไม่ใช่ซอร์สโค้ด\n• บรรทัด 49-51: ALLOWED_ROOT_FILES ยกเว้น middleware.ts/proxy.ts ที่ต้องอยู่นอก src\n• บรรทัด 56: VALID_EXTENSIONS รับแค่ .ts .tsx .js .jsx\n• บรรทัด 62-117: filterTreeFiles() กรองเฉพาะ blob ที่ผ่านเกณฑ์ พร้อมตัดที่ maxLimit กันโหลดหนัก\n• บรรทัด 119-176: detectNextFileType() จำแนก 8 บทบาท: page → layout → middleware → action → store → api → component → other ตามลำดับความจำเพาะ\n• บรรทัด 178-209: extractImportsFromCode() แกะ import บรรทัดเดียว/หลายบรรทัด/type import ข้ามบรรทัดคอมเมนต์ และตัดซ้ำ\n• บรรทัด 211-286: extractActionTriggers() จับ onClick และ form action เชื่อม UI เข้าหา Server Action",
-    links: "ถูกเรียกโดย pipeline.ts ขั้นกรองไฟล์ (365-394) และขั้นแกะความสัมพันธ์ (443-499) — ผลงานคน 2",
-    defense: "จุดขายของหนูคือลำดับการจำแนก detectNextFileType ที่เรียงจากเฉพาะเจาะจงไปกว้าง ทำให้ไฟล์ชื่อซ้อนกัน เช่น actions/page.tsx ยังตัดสินถูกค่ะ"
+    mechanics: "• บรรทัด 16-35: BLACKLIST_FOLDERS รายชื่อโฟลเดอร์ขยะ (node_modules, .next, dist, tests ฯลฯ)\n• บรรทัด 37-61: BLACKLIST_FILES ชุดไฟล์ config/lockfile ที่ไม่ใช่ซอร์สโค้ด\n• บรรทัด 63-69: ALLOWED_ROOT_FILES ยกเว้น middleware.ts/proxy.ts ที่ต้องอยู่นอกราก\n• บรรทัด 71-83: VALID_EXTENSIONS รับแค่ .ts .tsx .js .jsx และ RESERVED_IDENTIFIERS กันคำสงวนของภาษา\n• บรรทัด 85-101: Regex ชุดจำแนกโฟลเดอร์/ไฟล์ที่พบจริง — component(s?)/ui/widgets?/views?, action(s?), store(s?)/context(s?)/state, hooks?, api/, pages/, store ที่เป็นไฟล์ และ use* hook\n• บรรทัด 104-124: shouldIgnorePath() รวมกฎทั้งหมดไว้เป็นด่านเดียว ใช้ร่วมกันทั้งการกรองไฟล์\n• บรรทัด 129-152: filterTreeFiles() กรองเฉพาะ blob ที่ผ่านเกณฑ์ พร้อมตัดที่ maxLimit กันโหลดหนัก\n• บรรทัด 159-194: detectNextFileType() จำแนก 9 บทบาท เรียงจากเฉพาะเจาะจงไปกว้าง: page -> layout -> middleware -> Pages Router -> api -> action -> store -> hook -> component -> other\n• บรรทัด 199-225: extractImportsFromCode() แกะ import บรรทัดเดียว/หลายบรรทัด/type import ข้ามบรรทัดคอมเมนต์ และตัดซ้ำ\n• บรรทัด 227-240: extractTargetFunction() ช่วยแกะชื่อฟังก์ชันเป้าหมายจาก onClick\n• บรรทัด 245-302: extractActionTriggers() จับ onClick และ form action เชื่อม UI เข้าหา Server Action",
+    links: "ถูกเรียกโดย pipeline.ts ขั้นกรองไฟล์ (467-492) และขั้นแกะความสัมพันธ์ (527-529) — ผลงานคน 2",
+    defense: "จุดขายของหนูคือลำดับการจำแนก detectNextFileType ที่เรียงจากเฉพาะเจาะจงไปกว้าง และรองรับคำเอกพจน์/พหูพจน์กับชื่อโฟลเดอร์ที่พบจริงในโปรเจกต์ Next.js (ui/, widgets/, _components, hooks/) ทำให้ไฟล์ชื่อซ้อนกัน เช่น actions/page.tsx ยังตัดสินถูกค่ะ"
   },
   generator: {
     role: "โรงงานวาดกราฟ (คน 3) — แปลง relations เป็นโหนด/เส้นของ React Flow และ Mermaid",
-    mechanics: "• บรรทัด 8-23: sanitizeNodeId() แปลง path เป็น id ปลอดภัย ตัดวงเล็บ route group เช่น (auth)\n• บรรทัด 33-39: getNodeColorConfig() ชุดสีมาตรฐานตามบทบาท: middleware ม่วง, page ฟ้า, action ส้ม, store เขียว\n• บรรทัด 41-63: getNodeStyle() สร้าง inline style ต่อโหนดให้เหมาะกับธีมมืด\n• บรรทัด 65-163: buildFlowElements() แปลงไฟล์+relations เป็น Nodes/Edges พร้อมพิกัด position จัดกริดให้อ่านง่าย\n• บรรทัด 165-192: generateMermaidSyntax() ต่อสตริง graph TD พร้อม label ถ้าไม่มี relation เลยส่งโหนดเริ่มต้นกลับ ไม่ให้ error",
-    links: "ถูกเรียกโดย pipeline.ts บรรทัด 508-537 — ผลลัพธ์ส่งตรงเข้า FlowCanvas.tsx ของคน 3 เองบนหน้าจอ",
-    defense: "หนูแยกส่วนสร้างข้อมูลกราฟออกจากการแสดงผลชัดเจน buildFlowElements คืนข้อมูลล้วน ส่วน FlowCanvas จัดการ interactive เอง ทำให้เทสได้โดยไม่ต้องเปิดเบราว์เซอร์ค่ะ"
+    mechanics: "• บรรทัด 19-27: sanitizeNodeId() แปลงพาธเป็น id ปลอดภัย ตัดวงเล็บ route group เช่น (auth)\n• บรรทัด 29-46: COLOR_PALETTE + getNodeColorConfig() ชุดสีมาตรฐานตามบทบาท: middleware ม่วง, page ฟ้า, action ส้ม, store เขียว, hook อินดิโก #818cf8, component แดงชมพู, api เหลือง พร้อม fallback เป็น other\n• บรรทัด 48-97: applyDagreLayout() + ค่าคงที่ NODE_WIDTH/NODE_HEIGHT จัดพิกัดโหนดด้วย Dagre ให้อ่านง่ายและไม่ทับกัน\n• บรรทัด 102-164: buildFlowElements() แปลงไฟล์+relations เป็น Nodes/Edges — กันพาธต่างกันแต่ sanitize ได้ id เดียวกันด้วย idByPath, ไม่ใส่ edge ซ้ำ และมี fallback เมื่อ Dagre ล้ม\n• บรรทัด 169-191: generateMermaidSyntax() ต่อสตริง graph TD พร้อม label ถ้าไม่มี relation เลยส่งผังว่างกลับ ไม่ให้ error",
+    links: "ถูกเรียกโดย pipeline.ts บรรทัด 536-563 — ผลลัพธ์ส่งตรงเข้า FlowCanvas.tsx ของคน 3 เองบนหน้าจอ",
+    defense: "หนูแยกส่วนสร้างข้อมูลกราฟออกจากการแสดงผลชัดเจน buildFlowElements คืนข้อมูลล้วน ส่วน FlowCanvas จัดการ interactive เอง ทำให้เทสได้โดยไม่ต้องเปิดเบราว์เซอร์ (generator.test.ts 9 เคส) ค่ะ"
   },
   page: {
-    role: "Dashboard หลักของเว็บแอป (คน 4) — รับ URL ยิง API และคุม State ทั้งหน้า",
-    mechanics: "• บรรทัด 15: export default HomePage เริ่มคอมโพเนนต์\n• บรรทัด 17-24: useState 7 ตัว — url, token, loading, errorMessage, result, shareCopied, filterType\n• บรรทัด 26-32: drawerState คุม SideDrawer (isOpen, filePath, fileContent, githubRawUrl)\n• บรรทัด 32-97: handleSelectNode() ประกอบลิงก์ด้วยเครื่องมือคน 1 แล้ว fetch โค้ดจริง (73-84) พร้อม Fallback ดึงด้วย HEAD เมื่อ branch เปลี่ยน\n• บรรทัด 102-146: executeAnalysis() ตรวจ URL ด้วย validateUrlInput (105) แล้วยิง POST /api/analyze (119) ได้ผล set result (125)\n• บรรทัด 149-160: useEffect อ่าน ?state= เรียก decodeShareableState วิเคราะห์ต่อทันทีเมื่อเปิดลิงก์แชร์\n• บรรทัด 168-185: handleShare() encodeShareableState (172) แล้วคัดลอกลิงก์ลง clipboard\n• บรรทัด 195-230: useMemo คำนวณ stats, counts, displayedNodes/displayedEdges กรองตามเลเยอร์ที่เลือก\n• บรรทัด 265-290: ฟอร์มกรอก URL + Token พร้อมกล่องแจ้งเตือน error\n• บรรทัด 488: ติดตั้ง FlowCanvas · บรรทัด 498: ติดตั้ง SideDrawer",
-    links: "เรียกหา: /api/analyze (ของคน 6), ui-helper (ตรวจ/แชร์), github.ts (ลิงก์ raw/blob) — ส่งงานให้ FlowCanvas + SideDrawer แสดงผล",
-    defense: "หน้าของหนูเป็น State Orchestrator ล้วน ไม่มีตรรกะวิเคราะห์ปนเลย ทุกอย่างหนัก ๆ ฝาก API ของคน 6 ทำให้แยกเทสและแยกหน้าที่ชัดเจนค่ะ"
+    role: "หน้าแรกของเว็บแอป (คน 4) — Thin Wrapper วาง Navbar และเรียก FlowExplorer",
+    mechanics: "• บรรทัด 1-3: import React, ไอคอน GitFork และ FlowExplorer\n• บรรทัด 5: export default function HomePage() คอมโพเนนต์หน้าแรก\n• บรรทัด 9-34: ส่วนหัว Navbar สไตล์ Vercel Minimalist พร้อมโลโก้ Git Flowchart และลิงก์ GitHub\n• บรรทัด 36-37: เรียกใช้ <FlowExplorer /> ส่งมอบ State ทั้งหมดให้แยกทำงานแบบโมดูลาร์",
+    links: "เรียกใช้: FlowExplorer.tsx (State Orchestrator) — ครอบด้วย layout.tsx · ตัวไฟล์ page.tsx มีแค่ 39 บรรทัด ไม่ถือ logic ใด ๆ",
+    defense: "ผม refactor แยก page.tsx ให้เป็น Thin Wrapper (39 บรรทัด) และส่ง State ทั้งหมดไปไว้ใน FlowExplorer.tsx ตามหลัก Clean Architecture ทำให้โค้ดอ่านง่ายและดูแลรักษาได้ดีขึ้นมากครับ"
+  },
+  flowexplorer: {
+    role: "State Engine & UI Orchestrator (คน 4) — คุม Form, Filter, FlowCanvas และ SideDrawer",
+    mechanics: "• บรรทัด 27-31: SAMPLE_REPOSITORIES ชุดตัวอย่างให้กดลองวิเคราะห์เร็ว ๆ\n• บรรทัด 33: export function FlowExplorer() คอมโพเนนต์หลัก\n• บรรทัด 35-42: useState 8 ตัว — url, token, loading, errorMessage, result, shareCopied, filterType, isCodeLoading\n• บรรทัด 45-51: drawerState คุม SideDrawer (isOpen, filePath, fileContent, fileType, githubRawUrl)\n• บรรทัด 114-158: executeAnalysis() ตรวจ URL ด้วย validateUrlInput (115) แล้วยิง POST /api/analyze (126) ได้ผล set result\n• บรรทัด 160-167: useEffect เก็บ executeAnalysis ตัวล่าสุดไว้ใน ref กันวิเคราะห์ซ้ำเมื่อ state เปลี่ยน\n• บรรทัด 170-182: อ่าน ?state= แล้วเรียกวิเคราะห์ผ่าน queueMicrotask เพื่อเลี่ยง cascading re-render\n• บรรทัด 184-188: handleSubmit() ดักจับ submit ของฟอร์ม\n• บรรทัด 190-200: handleShare() encodeShareableState แล้วคัดลอก share link ลง clipboard\n• บรรทัด 210-240: useMemo คำนวณ counts (210), displayedNodes (220) และ displayedEdges (233) กรองตามแท็บที่เลือก\n• บรรทัด 528: ติดตั้ง FlowCanvas · บรรทัด 540: ติดตั้ง SideDrawer",
+    links: "ยิงคำขอ: POST /api/analyze (คน 6) · เรียกเครื่องมือ: ui-helper, github.ts · ส่งต่อผลลัพธ์: FlowCanvas (คน 3), SideDrawer (คน 5)",
+    defense: "FlowExplorer เป็นศูนย์กลางการบริหาร State ของ UI ฝั่ง Client ทั้งหมด แยกอิสระจาก Server Wrapper ทำให้สามารถนำไป Re-use หรือเปลี่ยน Layout หน้าเว็บได้สะดวกครับ"
   },
   uihelper: {
     role: "เครื่องมือกลางฝั่ง UI (คน 4) — ตรวจ URL คำนวณสถิติและระบบแชร์ลิงก์",
-    mechanics: "• บรรทัด 6-34: validateUrlInput() ด่านแรกก่อนยิง API — ค่าว่าง (8-10), ไม่ใช่ github.com (12-15), ดักแท็ก <script> ป้องกัน XSS (17-20) และ trim ให้เอง\n• บรรทัด 37-61: formatRepoStats() คำนวณจำนวนไฟล์ที่คัดกรองออกพร้อมเปอร์เซ็นต์ กัน NaN และค่าติดลบ\n• บรรทัด 64-106: calculateHealthScore() ให้เกรดสถาปัตยกรรม A (ratio 0.8-2.5), B (2.5-4.0), C (อื่น ๆ), N/A (0 ไฟล์)\n• บรรทัด 109-130: encodeShareableState() ฝัง url + activeNode เป็น base64 แนบใน ?state=\n• บรรทัด 133-164: decodeShareableState() ถอดกลับอย่างปลอดภัยด้วย try-catch ลิงก์ปลอมไม่ทำระบบพัง",
-    links: "ถูกเรียกโดย page.tsx (ตรวจ URL, สถิติ, แชร์) — เทสโดย 4_frontend_ui.test.ts ของคน 4 เอง",
-    defense: "validateUrlInput ของหนูดักทั้ง URL ผิดรูปแบบและการพยายามฝังสคริปต์ ช่วยลดภาระฝั่งเซิร์ฟเวอร์และเพิ่มชั้นความปลอดภัยตั้งแต่ปลายทางผู้ใช้ค่ะ"
+    mechanics: "• บรรทัด 16-56: validateUrlInput() ด่านแรกก่อนยิง API — ค่าว่าง (17-19), ตรวจ hostname จริงด้วย new URL() จึงกัน https://evil.com/?x=github.com/a/b ได้ (24-32, 44-47), ดักแท็ก <script> ป้องกัน XSS (35-42) และบังคับให้มีทั้ง owner/repo (49-53)\n• บรรทัด 61-80: formatRepoStats() คำนวณจำนวนไฟล์ที่คัดกรองออกพร้อมเปอร์เซ็นต์ กัน NaN และค่าติดลบ\n• บรรทัด 85-124: calculateHealthScore() ให้เกรดสถาปัตยกรรม A (ratio 0.8-2.5), B (2.5-4.0), C (อื่น ๆ), N/A (0 ไฟล์)\n• บรรทัด 129-148: encodeShareableState() ฝัง url + activeNode เป็น base64 แนบใน ?state=\n• บรรทัด 153-184: decodeShareableState() ถอดกลับอย่างปลอดภัยด้วย try-catch ลิงก์ปลอมไม่ทำระบบพัง",
+    links: "ถูกเรียกโดย FlowExplorer.tsx (ตรวจ URL, สถิติ, แชร์) — เทสโดย ui-helper.test.ts ของคน 4 เอง",
+    defense: "validateUrlInput ของหนูตรวจ hostname จริงด้วยตัวแยกวิเคราะห์ URL จึงกันลิงก์หลอกอย่าง https://evil.com/?x=github.com/a/b ได้ และดักการฝังสคริปต์ ช่วยลดภาระฝั่งเซิร์ฟเวอร์ตั้งแต่ปลายทางผู้ใช้ค่ะ"
   },
   codeviewer: {
     role: "ตัวจัดการโค้ดใน Inspector (คน 5) — ระบุภาษา ตัดทอน และไฮไลต์ด้วย Prism",
-    mechanics: "• บรรทัด 14-59: getLanguageFromPath() แผนที่นามสกุลไฟล์เป็นชื่อภาษา Prism (tsx/typescript/javascript/json) พร้อม fallback ที่ไม่ crash\n• บรรทัด 62-96: formatCodeSnippet() ตัดโค้ดไม่เกิน maxLines (300) พร้อมคืน totalLines และธง isTruncated\n• บรรทัด 99-119: highlightCodeWithPrism() เรียก Prism.highlight แปลงโค้ดเป็น HTML มีสี กรณีภาษาไม่รู้จักคืนข้อความ escape ปลอดภัย",
-    links: "ถูกเรียกโดย SideDrawer.tsx ของคน 5 — เทสโดย 5_side_drawer.test.ts (ครบทั้ง 3 ฟังก์ชัน)",
-    defense: "หนูจำกัดโค้ดที่แสดงไว้ 300 บรรทัดเพื่อประสิทธิภาพ DOM และแจ้งสถานะ isTruncated ตรงไปตรงมา ผู้ใช้รู้ทันทีว่าเห็นโค้ดบางส่วนค่ะ"
+    mechanics: "• บรรทัด 22-51: EXTENSION_LANGUAGE_MAP (22-34) และ getLanguageFromPath() (39-51) แผนที่นามสกุลไฟล์เป็นชื่อภาษา Prism (tsx/typescript/javascript/json) พร้อม fallback ที่ไม่ crash\n• บรรทัด 62-94: formatCodeSnippet() ตัดโค้ดไม่เกิน maxLines (300) พร้อมคืน totalLines และธง isTruncated และ escapeHtml() (88-94) ช่วย escape ก่อนไฮไลต์\n• บรรทัด 96-108: highlightCodeWithPrism() เรียก Prism.highlight แปลงโค้ดเป็น HTML มีสี กรณีภาษาไม่รู้จักคืนข้อความ escape ปลอดภัย",
+    links: "ถูกเรียกโดย SideDrawer.tsx ของคน 5 — ใช้ตัดโค้ด 300 บรรทัดก่อนแสดงและไฮไลต์ด้วย Prism ใน Drawer",
+    defense: "หนูจำกัดโค้ดที่แสดงไว้ 300 บรรทัดเพื่อประสิทธิภาพ DOM และมีปุ่ม \"ดูโค้ดทั้งหมด\" ใน SideDrawer เมื่อต้องการอ่านเต็ม ผู้ใช้รู้ทันทีว่าเห็นโค้ดบางส่วนค่ะ"
   },
   flowcanvas: {
     role: "ผืนผ้าใบกราฟแบบอินเทอร์แอกทีฟ (คน 3) — แสดง/โฟกัส/ไล่เส้นทางบน React Flow",
-    mechanics: "• บรรทัด 38-40: ค่ากริดผังกราฟ COLUMNS = 4 คอลัมน์ ขนาดช่อง 320×120\n• บรรทัด 45-112: computeTracePath() ไล่หาโหนดเชื่อมโยงทั้งสาย (Ancestors + Descendants) รองรับ 2 โหมด: ทั้งสาย และ 1 สเต็ป\n• บรรทัด 115-199: toRfNodes() แปลง FlowNodeItem เป็นโหนด React Flow พร้อมพิกัดกริดและสไตล์เรืองแสงเมื่ออยู่ในเส้นทาง\n• บรรทัด 202-205: BOILERPLATE_LABELS ชุดป้ายซ้ำซ้อน (shared UI ฯลฯ) ที่โหมดสมาร์ทจะซ่อน\n• บรรทัด 207-274: toRfEdges() กรองป้ายตามโหมด สมาร์ท/ทั้งหมด/ปิด และทำเส้น animated เมื่อถูกโฟกัส\n• บรรทัด 276-462: คอมโพเนนต์ FlowCanvas — state 4 ตัว (278-281), useMemo เตรียมโหนด/เส้น (284-297), Toolbar ลอย (325-405): ล้าง Focus, สวิตช์ trace, สวิตช์ป้าย, แผนที่ย่อ\n• บรรทัด 407-462: ReactFlow onNodeClick เลือกโหนดแล้วเรียก onSelectNode ให้ page.tsx เปิด Drawer พร้อม MiniMap ย่อ\n• บรรทัด 315-321: ถ้าไม่มีโหนดแสดงข้อความว่างอย่างสวยงาม ไม่ crash",
-    links: "รับ nodes/edges จาก page.tsx (มาจาก generator ผ่าน API ของคน 6) — คลิกโหนดส่งกลับเป็นเหตุการณ์เปิด SideDrawer",
-    defense: "หนูใช้ onlyRenderVisibleElements และ useMemo ทุกจุดเพื่อรองรับกราฟหลายร้อยโหนดแบบลื่น ๆ และโหมดสมาร์ทช่วยลดสัญญาณรบกวนจากป้ายซ้ำ ๆ ค่ะ"
+    mechanics: "• บรรทัด 52-54: ค่าคงที่ผังกราฟ COLUMNS = 4 คอลัมน์ ความกว้างช่อง 320 และความสูงแถว 120 (ใช้เป็นค่าตั้งต้นของกริด)\n• บรรทัด 57-127: computeTracePath() ไล่หาโหนดเชื่อมโยงทั้งสาย (Ancestors + Descendants) รองรับ 2 โหมด: ทั้งสาย และ 1 สเต็ป\n• บรรทัด 129-225: toRfNodes() แปลง FlowNodeItem เป็นโหนด React Flow พร้อมไฮไลต์เมื่ออยู่ในเส้นทางที่โฟกัส\n• บรรทัด 227-228: CRITICAL_ARCHITECTURAL_LABELS ป้ายสำคัญทางสถาปัตยกรรมที่โหมด Smart แสดงเฉพาะป้ายที่มีความหมาย\n• บรรทัด 230-297: toRfEdges() กรองป้ายตามโหมด สมาร์ท/ทั้งหมด/ปิด และทำเส้น animated เมื่อถูกโฟกัส\n• บรรทัด 299-697: คอมโพเนนต์ FlowCanvasInner — state 8 ตัว (300-309), useMemo เตรียมโหนด/เส้น/ไฮไลต์เส้นทาง (316-339), ค้นหาโหนด (404-408), ข้อความเมื่อยังไม่มีโหนด (425-431), Toolbar ลอย (436+), onNodeClick แจ้ง onSelectNode (661-668) พร้อม MiniMap และ onlyRenderVisibleElements (673)\n• บรรทัด 700-705: FlowCanvas ตัวนอกห่อ ReactFlowProvider เพื่อให้ hook useReactFlow ทำงานได้",
+    links: "รับ nodes/edges จาก FlowExplorer.tsx (มาจาก generator ผ่าน API ของคน 6) — คลิกโหนดส่งกลับเป็นเหตุการณ์เปิด SideDrawer",
+    defense: "หนูใช้ onlyRenderVisibleElements และ useMemo ทุกจุดเพื่อรองรับกราฟหลายร้อยโหนดแบบลื่น ๆ และโหมดสมาร์ทช่วยลดสัญญาณรบกวนจากป้ายที่ไม่จำเป็นค่ะ"
   },
   sidedrawer: {
     role: "กล่องตรวจโค้ดเด้งด้านขวา (คน 5) — Dialog แสดงโค้ดจริงของโหนดที่คลิก",
-    mechanics: "• บรรทัด 15: SideDrawer component รับ props isOpen/filePath/fileType/rawCode/githubRawUrl\n• บรรทัด 21-33: useMemo เตรียมผลลัพธ์ครบชุด — getLanguageFromPath + formatCodeSnippet(300) + highlightCodeWithPrism\n• บรรทัด 36-44: handleCopy() คัดลอกโค้ดเต็มลง clipboard พร้อมข้อความยืนยัน 2 วินาที\n• บรรทัด 48-96: โครง dialog — role=\"dialog\" aria-modal รองรับ screen reader (48-55), badge ประเภทไฟล์ (58-60), ชื่อไฟล์แบบ truncate (62)\n• บรรทัด 66-69: นับจำนวนบรรทัดจริง พร้อมเตือน Truncated เมื่อโค้ดเกิน 300 บรรทัด\n• บรรทัด 71-77: ปุ่ม Open on GitHub ↗ (เปิด blob URL) และ Copy Code\n• บรรทัด 79-93: แสดงโค้ดที่ผ่าน Prism ใน <pre><code> เลื่อนดูได้ทุกทิศ",
-    links: "ถูกเปิดโดย page.tsx เมื่อคลิกโหนดบน FlowCanvas — ใช้เครื่องมือ code-viewer.ts ของคน 5 เอง",
+    mechanics: "• บรรทัด 25: SideDrawer component รับ props isOpen/filePath/fileType/rawCode/githubRawUrl\n• บรรทัด 34-36: state copied + fullCodeFilePath พร้อม showFullCode ที่คิดจาก filePath ปัจจุบัน (ไม่ค้างสถานะเมื่อสลับไฟล์)\n• บรรทัด 50-61: useMemo เตรียมผลลัพธ์ครบชุด — getLanguageFromPath + formatCodeSnippet(300) + highlightCodeWithPrism และขยายเป็น 20,000 บรรทัดเมื่อกดดูโค้ดทั้งหมด\n• บรรทัด 63-70: handleCopy() คัดลอกโค้ดเต็มลง clipboard พร้อมข้อความยืนยัน 2 วินาที\n• บรรทัด 74-90: โครง dialog — backdrop ปิดเมื่อคลิกนอก (77-81), role=\"dialog\" aria-modal รองรับ screen reader (86-88)\n• บรรทัด 92-116: แถบหัว Drawer — badge ประเภทไฟล์ (95-98), ชื่อไฟล์แบบ truncate (100), ปุ่มปิด (108-111)\n• บรรทัด 117-131: นับจำนวนบรรทัดจริง พร้อมปุ่ม \"ดูโค้ดทั้งหมด\" เมื่อโค้ดเกิน 300 บรรทัด\n• บรรทัด 132-155: ปุ่มเปิดบน GitHub ↗ (blob URL) และปุ่ม Copy Code",
+    links: "ถูกเปิดโดย FlowExplorer.tsx เมื่อคลิกโหนดบน FlowCanvas — ใช้เครื่องมือ code-viewer.ts ของคน 5 เอง",
     defense: "หนูใส่ aria-modal และ aria-label ให้ dialog ตั้งแต่ต้น และใช้ useMemo รวมการประมวลผล Prism ไว้จุดเดียว ทำให้เปิด-ปิด Drawer หลายรอบไม่หน่วงค่ะ"
   },
   layout: {
     role: "โครงหน้ารายของ Next.js (Shared) — โหลดฟอนต์และครอบทุกหน้า",
-    mechanics: "• บรรทัด 1-3: import ฟอนต์จาก next/font/google และ globals.css\n• บรรทัด 5-19: ประกาศฟอนต์ 3 ตระกูล — Geist (หลัก), Geist Mono (โค้ด), IBM Plex Sans Thai weight 400-700 subsets thai+latin รองรับภาษาไทยเต็มรูปแบบ\n• บรรทัด 21-24: metadata ชื่อเว็บ \"GitFlow Visualizer\" + description\n• บรรทัด 26-40: RootLayout ครอบ <html><body> ส่งต่อ font variables ผ่าน className พร้อม antialiased",
+    mechanics: "• บรรทัด 1-3: import ฟอนต์จาก next/font/google และ globals.css\n• บรรทัด 5-19: ประกาศฟอนต์ 3 ตระกูล — Geist (หลัก), Geist Mono (โค้ด), IBM Plex Sans Thai weight 400-700 subsets thai+latin รองรับภาษาไทยเต็มรูปแบบ\n• บรรทัด 22-25: metadata ชื่อเว็บ \"GitFlow Visualizer\" + description\n• บรรทัด 27-41: RootLayout ครอบ <html><body> ส่งต่อ font variables ผ่าน className พร้อม antialiased",
     links: "ครอบ page.tsx โดยอัตโนมัติผ่าน App Router — ธีมสีและฟอนต์มาจาก globals.css",
     defense: "หนูเลือก IBM Plex Sans Thai เพราะอ่านภาษาไทยได้สวยทั้งขนาดเล็ก-ใหญ่ และใช้ next/font ที่ preload ให้เอง ทำให้ไม่มีปัญหา FOUT ตอนโหลดครั้งแรกค่ะ"
   },
   types: {
     role: "สัญญาข้อมูลกลางของทั้งทีม (Shared) — Interface หนึ่งเดียวที่ทุกโมดูลอ้างอิง",
-    mechanics: "• บรรทัด 3: NextFileType 8 บทบาท — page/layout/action/middleware/store/component/api/other\n• บรรทัด 5-12: GitHubTreeItem โครงไฟล์จาก Trees API (path, mode, type blob|tree, sha)\n• บรรทัด 14-18: ParsedGitHubUrl ผลแกะ URL { owner, repo, branch? }\n• บรรทัด 20-26: CodeRelation เส้นความสัมพันธ์ — type import/action/event/middleware + label\n• บรรทัด 28-33: FlowNodeItem โหนดกราฟ (id, label, fileType, position x,y)\n• บรรทัด 35-41: FlowEdgeItem เส้นกราฟ (animated, style stroke)\n• บรรทัด 43-56: AnalysisResult ผลรวมสุดท้าย — totalFiles, relations, nodes, edges, mermaidSyntax, isCached, executionTimeMs\n• บรรทัด 58-64: SideDrawerState สถานะกล่องตรวจโค้ดของคน 4",
+    mechanics: "• บรรทัด 3: NextFileType 8 บทบาท — page/layout/action/middleware/store/component/api/other\n• บรรทัด 5-12: GitHubTreeItem โครงไฟล์จาก Trees API (path, mode, type blob|tree, sha)\n• บรรทัด 14-18: ParsedGitHubUrl ผลแกะ URL { owner, repo, branch? }\n• บรรทัด 20-26: CodeRelation เส้นความสัมพันธ์ — type import/action/event/middleware + label\n• บรรทัด 27-33: FlowNodeItem โหนดกราฟ (id, label, fileType, position x,y)\n• บรรทัด 35-41: FlowEdgeItem เส้นกราฟ (animated, style stroke)\n• บรรทัด 44-57: AnalysisResult ผลรวมสุดท้าย — totalFiles, relations, nodes, edges, mermaidSyntax, isCached, executionTimeMs\n• บรรทัด 58-64: SideDrawerState สถานะกล่องตรวจโค้ดของคน 4",
     links: "ถูก import โดยทุกโมดูล — เป็นจุดสัญญาณที่ทำให้ 6 คนพัฒนาแยกกันได้โดยไม่ทับกัน",
     defense: "ตรงนี้คือสัญญาประชาคมของทีม ใครเปลี่ยน interface ตรงนี้ TypeScript จะตะโกนทุกไฟล์ทันที ทำให้เราจับความเสียหายได้ตั้งแต่ตอน build ไม่ต้องรอ runtime ค่ะ"
   },
   globals: {
     role: "ธีมพื้นฐานของเว็บแอป (Shared) — สี ฟอนต์ และ scrollbar ระดับทั้งโปรเจกต์",
-    mechanics: "• บรรทัด 1-7: @import tailwindcss และ @theme inline ผูกสี/ฟอนต์เข้ากับตัวแปร CSS\n• บรรทัด 9-12: :root กำหนดพื้นหลังเข้ม #090d16 ตัวอักษร #f1f5f9\n• บรรทัด 14-22: body ใช้ฟอนต์ไทย (font-thai) พร้อม font-feature-settings และ text-rendering optimizeLegibility\n• บรรทัด 24-28: ::selection สีฟ้าโปร่งแสงสำหรับข้อความที่ลากคลุม\n• บรรทัด 30-47: scrollbar บาง 6px สไตล์มืด ทั้งแนวตั้งและแนวนอน",
+    mechanics: "• บรรทัด 1-7: @import tailwindcss และ @theme inline ผูกสี/ฟอนต์เข้ากับตัวแปร CSS\n• บรรทัด 9-12: :root กำหนดพื้นหลังดำ #000000 ตัวอักษร #ededed\n• บรรทัด 14-22: body ใช้ฟอนต์ไทย (font-thai) พร้อม font-feature-settings และ text-rendering optimizeLegibility\n• บรรทัด 24-30: .bg-grid-pattern พื้นหลังตารางจาง ๆ สไตล์ Vercel\n• บรรทัด 33-36: ::selection สีขาวโปร่งแสงสำหรับข้อความที่ลากคลุม\n• บรรทัด 38-55: scrollbar บาง 4px สไตล์มืด ทั้งแนวตั้งและแนวนอน",
     links: "ถูก import โดย layout.tsx — ทุกคอมโพเนนต์ได้ธีมจากไฟล์นี้ผ่าน Tailwind theme",
-    defense: "หนูตั้งพื้นหลังเข้มระดับ #090d16 ที่เข้มพอไม่ให้ขอบจอสว่างเกิน แต่ยังแยกชั้นพื้นผิวได้ บวก scrollbar บาง ๆ ให้ความรู้สึกเหมือนเครื่องมือดีไซเนอร์ระดับมืออาชีพค่ะ"
+    defense: "หนูตั้งพื้นหลังดำสนิท #000000 พร้อมพื้นหลังตารางจาง ๆ ช่วยให้แยกชั้นพื้นผิวได้ บวก scrollbar บาง 4px ให้ความรู้สึกเหมือนเครื่องมือดีไซเนอร์ระดับมืออาชีพค่ะ"
   },
   test1: {
-    role: "เทสของคน 1 — พิสูจน์ github.ts แกะ URL และประกอบลิงก์ได้ครบทุกกรณี",
-    mechanics: "• บรรทัด 6-78: parseGitHubUrl 12 เคส — https/http/ไม่มี scheme/www, ตัด .git, ตัด slash ท้าย, ตัด query+hash, ตัด /tree/main และ 3 เคสปัดค่าว่าง/ไม่ใช่ github/ไม่มี repo ให้ได้ null\n• บรรทัด 79-91: buildGitHubApiUrl 2 เคส — branch main ปกติ และ branch กำหนดเอง\n• บรรทัด 93-115: buildGitHubHeaders 4 เคส — ไม่มี token ต้องมี User-Agent, token ว่างต้องไม่มี Authorization, มี token แนบ Bearer ถูกต้อง, token มีเว้นวรรคต้อง trim\n• บรรทัด 117-132: buildGitHubRawUrl 3 เคส รวมป้องกันบั๊กสลับตำแหน่ง filePath/branch\n• บรรทัด 134-139: buildGitHubBlobUrl 1 เคส",
-    links: "ทดสอบโมดูลคน 1 (github.ts) — รันอัตโนมัติบน CI ผ่าน Regex feat/person-1",
-    defense: "เทสของหนูเน้นกรณีขอบที่ผู้ใช้เผลอทำ เช่น วางลิงก์มาจากหน้า /tree/main หรือ token มีช่องว่าง 22 เคสครอบคลุมทุกฟังก์ชันของ github.ts ค่ะ"
+    role: "เทสของคน 1 — พิสูจน์ว่า github.ts แกะ URL (รวมชื่อ branch) และประกอบลิงก์ได้ครบทุกกรณี",
+    mechanics: "• บรรทัด 1-2: import ฟังก์ชันทั้ง 5 ตัวจาก './github' เข้ามาทดสอบ\n• บรรทัด 4-45: parseGitHubUrl 5 เคส — URL ปกติ, ไม่มี protocol + ตัด .git, อ่านชื่อ branch จาก /tree/<branch> และ /blob/<branch>, ปฏิเสธ hostname ปลอมอย่าง evilgithub.com, รับ www.github.com และปัดค่าที่ไม่ครบ\n• บรรทัด 47-58: buildGitHubApiUrl / buildGitHubHeaders — ต่อ endpoint พร้อม branch และใส่ Authorization เฉพาะเมื่อ token ใช้งานได้\n• บรรทัด 60-77: buildGitHubRawUrl / buildGitHubBlobUrl — สร้าง raw/blob url, สลับ argument ได้เมื่อผู้เรียกส่งสลับกัน, ตัด slash ซ้ำด้านหน้า",
+    links: "ทดสอบโมดูลคน 1 (github.ts) — รันพร้อมเทสอีก 3 ไฟล์ด้วย npm test บน CI",
+    defense: "เทสชุดนี้ล็อกบั๊กด้านความปลอดภัยไว้ 2 ข้อ: hostname ปลอมที่เคยหลุดเพราะใช้ endsWith และการอ่านชื่อ branch จาก URL ที่ผู้ใช้ก๊อปมาจากหน้า /tree/main ค่ะ"
   },
   test2: {
-    role: "เทสของคน 2 — ตรวจการกรองไฟล์ การจำแนกเลเยอร์ และการแกะ import/action",
-    mechanics: "• บรรทัด 7-60: filterTreeFiles 3 เคส — กรอง node_modules/lockfile/รูป/config, เอาเฉพาะ blob ไม่เอาโฟลเดอร์, ตัดที่ maxLimit เพื่อความปลอดภัย\n• บรรทัด 62-100: detectNextFileType 9 เคส — page, layout, middleware/proxy, action, store, api, component และโปรเจกต์ไม่มี src/ นำหน้า\n• บรรทัด 102-145: extractImportsFromCode 5 เคส — import เดี่ยว, หลายบรรทัด, type import, ไม่แกะบรรทัดที่คอมเมนต์ทิ้ง, ตัดตัวซ้ำ\n• บรรทัด 147-177: extractActionTriggers 2 เคส — onClick ดึงชื่อฟังก์ชันเป้าหมาย และ form action สำหรับ Server Action",
-    links: "ทดสอบโมดูลคน 2 (parser.ts) — ออกแบบร่วมกับเทสคน 6 ที่ mock ทั้ง tree และเนื้อโค้ด",
-    defense: "หนูเขียนเคสสั้นแต่จำเพาะ แต่ละ it ตัดสินพฤติกรรมเดียว ทำให้เทสล้มเมื่อไหร่รู้ทันทีว่ากฎการกรองบรรทัดไหนพังค่ะ"
+    role: "เทสของคน 2 — ตรวจการจำแนกเลเยอร์ (รวม hook และคำเอกพจน์) การกรองไฟล์ และการแกะ import/action",
+    mechanics: "• บรรทัด 17-36: detectNextFileType ข้อบังคับของ Next.js — page/layout/route, middleware ที่ root และใน src, Pages Router\n• บรรทัด 38-57: เอกพจน์/พหูพจน์ — store/ กับ stores/, component/ กับ components/, action/ กับ actions/ (บั๊กเดิมรองรับแค่พหูพจน์)\n• บรรทัด 59-107: ชื่อโฟลเดอร์ที่พบจริง — ui/, widgets/, views/, private folder _components, hooks/ และไฟล์ use* hook, ไม่นับ user.ts/restore.ts ผิดประเภท, store ที่เป็นไฟล์\n• บรรทัด 109-138: filterTreeFiles — ตัด config/lock/เทสต์, อนุญาต root file เฉพาะ middleware/proxy, ไม่เกิน maxLimit และทน input ผิดรูป\n• บรรทัด 140-159: extractImportsFromCode — เก็บเฉพาะ import ที่อ้างถึงไฟล์ในโปรเจ็ค, ไม่ซ้ำ และคืน [] เมื่อไม่มี\n• บรรทัด 161-191: extractActionTriggers — จับ onClick และ form action, ไม่คืนผลเมื่อไม่มี event",
+    links: "ทดสอบโมดูลคน 2 (parser.ts) — 20 เคส ครอบคลุมทุกฟังก์ชันที่ pipeline เรียกใช้",
+    defense: "หนูเขียนเคสสั้นแต่จำเพาะ แต่ละ it ตัดสินพฤติกรรมเดียว ทำให้เทสล้มเมื่อไหร่รู้ทันทีว่ากฎข้อไหนพังค่ะ"
   },
   test3: {
     role: "เทสของคน 3 — ตรวจการทำ id, ชุดสี, พิกัดกราฟ และ Mermaid",
-    mechanics: "• บรรทัด 7-18: sanitizeNodeId 3 เคส — เปลี่ยน slash/จุด/@ เป็น underscore, ตัดวงเล็บ route group เช่น (auth), ตัด underscore หัวท้ายเกิน\n• บรรทัด 21-40: getNodeColorConfig 4 เคส — middleware ม่วง #a855f7, page ฟ้า #38bdf8, action ส้ม #fb923c, store เขียว #4ade80\n• บรรทัด 43-71: buildFlowElements — แปลงไฟล์+relations เป็น Nodes/Edges พร้อมพิกัด position ครบ\n• บรรทัด 73-89: generateMermaidSyntax 2 เคส — ต่อ graph TD พร้อม label ถูกต้อง และไม่มี relation ก็ต้องไม่ error",
+    mechanics: "• บรรทัด 9-24: sanitizeNodeId — แปลงพาธเป็น id ที่ใช้อักขระปลอดภัย และไม่คืนค่าว่าง\n• บรรทัด 26-34: getNodeColorConfig — คืนสีตามประเภทไฟล์ และ fallback เป็น other เมื่อไม่รู้จัก\n• บรรทัด 36-88: buildFlowElements — 1 โหนดต่อ 1 ไฟล์, เชื่อม edge ตามพาธจริง, ไม่ทิ้งโหนดเมื่อพาธต่างกันแต่ได้ id เดียวกัน (บั๊กเดิม), คำนวณพิกัด ไม่ใส่ edge ซ้ำ และไม่ crash เมื่อไม่มีไฟล์เลย\n• บรรทัด 90-104: generateMermaidSyntax — คืนผังว่างปลอดภัยเมื่อไม่มี relation และสร้าง graph TD พร้อมป้ายกำกับ",
     links: "ทดสอบโมดูลคน 3 (generator.ts) — ชุดสีที่ตรวจที่นี่ต้องตรงกับที่ FlowCanvas ใช้จริง",
     defense: "หนูล็อกชุดสีไว้ในเทสเลย เพราะสีคือภาษาสื่อสารของกราฟ ถ้าใครเผลอเปลี่ยน CI จะจับได้ก่อนขึ้น main ค่ะ"
   },
   test4: {
-    role: "เทสของคน 4 — ตรวจเครื่องมือฝั่ง UI ทั้งตรวจ URL สถิติและเกรดสถาปัตยกรรม",
-    mechanics: "• บรรทัด 12-35: validateUrlInput 4 เคส — ค่าว่าง/เคาะวรรคแจ้งเตือน, ไม่ใช่ github ต้องเตือน, ดักแท็ก <script> แปลกปลอม, มีช่องว่างหน้าหลัง trim ให้เอง\n• บรรทัด 38-59: formatRepoStats 3 เคส — คำนวณสรุปถูกต้อง, 0 ไฟล์ไม่เออเร่อ NaN, ไฟล์วิเคราะห์มากกว่าดิบต้องตัดทิ้งเป็น 0 ไม่ติดลบ\n• บรรทัด 61-106: calculateHealthScore 4 เคส — ratio 0.8-2.5 ได้ A, 2.5-4.0 ได้ B, นอกช่วงได้ C, 0 ไฟล์ได้ N/A",
+    role: "เทสของคน 4 — ตรวจเครื่องมือฝั่ง UI ทั้งตรวจ URL สถิติ เกรดสถาปัตยกรรม และระบบแชร์ลิงก์",
+    mechanics: "• บรรทัด 10-39: validateUrlInput — ผ่านเมื่อเป็น github.com ที่มี owner/repo ครบ, ปฏิเสธโดเมนอื่น, ปฏิเสธ URL ที่เพียงแค่มีคำว่า github.com อยู่ข้างใน (บั๊กเดิม) และปฏิเสธ input ว่างหรือมีอักขระอันตราย\n• บรรทัด 41-56: formatRepoStats — คำนวณจำนวนไฟล์ที่ละเว้นพร้อมข้อความสรุป และไม่คืนค่าติดลบหรือ NaN\n• บรรทัด 58-73: calculateHealthScore — ให้ N/A เมื่อไม่มีไฟล์, ให้เกรดตามสัดส่วนเส้นเชื่อมต่อต่อจำนวนไฟล์ และไม่คืน NaN เมื่อ input ผิดปกติ\n• บรรทัด 75-96: encodeShareableState / decodeShareableState — ไป-กลับได้ค่าเดิม, คืน activeNode เป็น undefined เมื่อไม่ได้ส่งมา และทนข้อมูลเสียโดยคืน null แทนการ throw",
     links: "ทดสอบโมดูลคน 4 (ui-helper.ts) — ครอบคลุมฟังก์ชันที่หน้า Dashboard เรียกใช้ทุกตัว",
-    defense: "หนูให้น้ำหนักเคสกันพังพิเศษ เช่น ไฟล์วิเคราะห์มากกว่าไฟล์ดิบต้องโชว์ 0% เพราะเคยเจอกรณี API คืนตัวเลขข้ามกันตอน branch เพิ่งถูก push ค่ะ"
-  },
-  test5: {
-    role: "เทสของคน 5 — ตรวจเครื่องมือ Prism ทั้งระบุภาษา ตัดทอนและไฮไลต์",
-    mechanics: "• บรรทัด 6-27: getLanguageFromPath 5 เคส — .tsx เป็น tsx, .ts เป็น typescript, .js เป็น javascript, .json เป็น json, นามสกุลไม่รู้จัก fallback ไม่ crash\n• บรรทัด 30-47: formatCodeSnippet 2 เคส — โค้ดสั้นนับบรรทัดถูกต้องไม่ขึ้น isTruncated, เกิน maxLines ตัดเฉพาะส่วนแรกและขึ้น isTruncated\n• บรรทัด 50-62: highlightCodeWithPrism 2 เคส — โค้ด TypeScript ต้องมีคลาส token ของ Prism, ภาษาไม่รองรับต้องคืนข้อความ escape ปลอดภัย",
-    links: "ทดสอบโมดูลคน 5 (code-viewer.ts) — หน้าด่านก่อน SideDrawer แสดงโค้ดจริง",
-    defense: "เคสสำคัญของหนูคือภาษาไม่รู้จักต้องไม่ crash เพราะผู้ใช้วิเคราะห์ repo อะไรก็ได้ ไฟล์แปลก ๆ เช่น Dockerfile ต้องโชว์เป็นข้อความธรรมดาอย่างปลอดภัยค่ะ"
-  },
-  test6: {
-    role: "Integration Test ของคน 6 — พิสูจน์ว่าทั้ง 4 โมดูลเชื่อมกันได้จริงตั้งแต่ URL ถึงกราฟ",
-    mechanics: "• บรรทัด 7-14: beforeEach/afterEach ล้างแคชและ restore mocks ทุกเคส กันข้อมูลตกค้าง\n• บรรทัด 21-70: โฟลว์ครบวงจร — mock tree 7 ไฟล์ (มีขยะ) ผ่าน runAnalysisPipeline ต้องได้ nodes ครบทุกประเภท, edge form action, และ mermaidSyntax มี graph TD\n• บรรทัด 74-93: แคช — ครั้งแรก isCached=false ครั้งสองดึงจาก pipelineCache ได้ isCached=true\n• บรรทัด 96-112: Performance — 500 ไฟล์ (250 ขยะ) ต้องจบใน < 150ms\n• บรรทัด 115-122: BVA — แคลงว่าง 0 ไฟล์ต้องคืน nodes/edges ว่างพร้อม mermaid ปลอดภัย\n• บรรทัด 125-131: Negative — URL gitlab ต้อง rejects พร้อมข้อความ 'URL ต้องมาจาก github.com เท่านั้น'\n• บรรทัด 133-145: Adversarial — mock fetch ตอบ 403 Rate Limit ต้อง throw แนะนำใส่ Token\n• บรรทัด 549-556: ปิดท้ายด้วยเทสเส้น shared UI — layout → ButtonComponent/MemberItem จาก inferStructuralRelations",
-    links: "ทดสอบทั้งระบบรวม — คน 1+2+3 ส่งโมดูลมา หนูจับมาเดินทั้งไปป์ไลน์บน CI ทุกครั้งที่ใคร push",
-    defense: "เทสนี้คือสัญญาของหนูกับทีม ใครแก้โมดูลจนการเชื่อมต่อพัง CI จะแดงภายในนาทีเดียว และเคส 500 ไฟล์ < 150ms พิสูจน์ว่าระบบไม่หน่วงแม้ repo ใหญ่ค่ะ"
+    defense: "หนูให้น้ำหนักเคสกันพังพิเศษ เช่น ลิงก์ปลอมที่แค่มีคำว่า github.com อยู่ข้างใน ต้องถูกปฏิเสธตั้งแต่ฝั่งผู้ใช้ ไม่ต้องรอให้เซิร์ฟเวอร์ตอบค่ะ"
   }
 };

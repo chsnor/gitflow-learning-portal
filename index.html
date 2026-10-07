@@ -44,14 +44,14 @@
       --shadow-pop: 0 12px 32px rgb(0 0 0 / 0.55);
     }
   </style>
-  <link rel="stylesheet" href="style.css?v=22">
+  <link rel="stylesheet" href="style.css?v=34">
 </head>
 
 <body class="h-dvh overflow-hidden bg-canvas font-sans text-ink antialiased">
   <a class="skip-link" href="#workspace">ข้ามไปยังพื้นที่โค้ด</a>
   <noscript><p class="noscript-note">หน้านี้ต้องเปิดใช้งาน JavaScript เพื่อแสดงเครื่องมือวิเคราะห์โค้ด</p></noscript>
 
-  <div id="app-shell" class="grid h-full grid-cols-1 lg:grid-cols-[236px_minmax(0,1fr)] xl:grid-cols-[236px_minmax(0,1fr)_352px]">
+  <div id="app-shell" class="app-shell grid h-full grid-cols-1 lg:grid-cols-[236px_minmax(0,1fr)] xl:grid-cols-[236px_minmax(0,1fr)_352px]">
 
     <!-- ================= Rail: 4 โหมด ================= -->
     <aside id="rail" class="flex min-h-0 flex-col gap-3 overflow-y-auto border-r border-line-soft bg-panel px-3 py-3" aria-label="เมนูหลัก">
@@ -59,7 +59,7 @@
         <span class="grid size-9 place-items-center rounded-xl border border-accent/35 bg-accent/12 text-[17px]" aria-hidden="true">⚡</span>
         <span class="flex flex-col leading-tight">
           <strong class="text-[15px] tracking-tight">GitFlow</strong>
-          <small class="text-[10px] uppercase tracking-[0.08em] text-ink-faint">Learning Portal</small>
+          <small class="text-[11.5px] uppercase tracking-[0.08em] text-ink-faint">Learning Portal</small>
         </span>
       </div>
 
@@ -76,14 +76,14 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M12 12v10M3 7l9 5 9-5"/></svg>
           <span>ระบบ</span><em>สถาปัตยกรรม · CI/CD · ความเสี่ยง</em>
         </button>
-        <button type="button" class="mode-item" id="nav-quiz" onclick="switchMainView('quiz')" aria-pressed="false">
+        <button type="button" class="mode-item" id="nav-quiz" onclick="switchMainView('pitch')" aria-pressed="false">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 2 9l10 5 10-5z"/><path d="M6 11.5V16c0 1.5 2.7 3 6 3s6-1.5 6-3v-4.5"/></svg>
-          <span>ซ้อม</span><em>Q&amp;A + แบบทดสอบ</em>
+          <span>ซ้อมพรีเซนต์</span><em>แผน 15 นาที · Q&amp;A · Quiz</em>
         </button>
       </nav>
 
-      <div class="mt-auto hidden flex-col gap-1 border-t border-line-soft px-1.5 pt-3 text-[10.5px] text-ink-faint lg:flex">
-        <span>ทีม 6 คน · 19 ไฟล์</span>
+      <div class="mt-auto hidden flex-col gap-1 border-t border-line-soft px-1.5 pt-3 text-[12px] text-ink-faint lg:flex">
+        <span>ทีม 6 คน · 18 ไฟล์</span>
         <span class="flex items-center gap-1"><kbd>A</kbd><kbd>D</kbd> เปลี่ยนสเต็ป · <kbd>1</kbd>–<kbd>4</kbd> โหมด</span>
       </div>
     </aside>
@@ -94,12 +94,12 @@
       <header class="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-line-soft bg-panel/85 px-4 py-2.5 backdrop-blur">
         <div class="flex min-w-0 flex-col">
           <h1 class="truncate text-[15px] font-bold tracking-tight" id="view-title">เจาะสเต็ป — โค้ดจริงคู่ขนาน</h1>
-          <span class="truncate text-[11px] text-ink-faint" id="view-sub">ซ้าย = งานคน 6 · ขวา = โมดูลเพื่อนที่ถูกเรียก</span>
+          <span class="truncate text-[12px] text-ink-faint hidden sm:inline" id="view-sub">ซ้าย = งานคน 6 · ขวา = โมดูลเพื่อนที่ถูกเรียก</span>
         </div>
 
         <div id="section-tabs" class="order-3 flex w-full gap-1 overflow-x-auto sm:order-none sm:w-auto" role="tablist" aria-label="หมวดย่อยของโหมด"></div>
 
-        <button type="button" id="ctx-btn" class="step-btn xl:hidden" onclick="toggleContextRail()" aria-label="เปิดแผลบริบทไฟล์">
+        <button type="button" id="ctx-btn" class="step-btn" onclick="toggleContextRail()" aria-label="เปิดหรือปิดแถบบริบทด้านข้าง" title="เปิด/ปิดแถบบริบทด้านข้าง">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h7"/></svg>
         </button>
 
@@ -122,11 +122,11 @@
         <div class="flex h-full min-h-0 flex-col" id="blocks-panes">
           <div class="flex shrink-0 items-center gap-2 overflow-x-auto border-b border-line-soft bg-panel/60 px-3 py-1.5" id="step-bar">
             <div class="flex items-center gap-1" id="step-dots" role="tablist" aria-label="เลือกสเต็ป 1-6"></div>
-            <span class="ml-auto shrink-0 text-[10.5px] text-ink-faint">คลิกที่บรรทัดไหนก็ได้เพื่ออ่านที่มาน</span>
+            <span class="ml-auto shrink-0 text-[12px] text-ink-faint hidden md:inline">คลิกที่บรรทัดไหนก็ได้เพื่ออ่านที่มา</span>
           </div>
 
-          <div class="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-2">
-            <section class="code-pane min-w-0 min-h-0 border-line-soft xl:border-r" id="left-pane" aria-label="โค้ดฝั่งซ้าย">
+          <div class="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-2">
+            <section class="code-pane min-w-0 min-h-0 border-line-soft lg:border-r" id="left-pane" aria-label="โค้ดฝั่งซ้าย">
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-line-soft bg-panel px-3 py-2" id="left-tabs"></div>
               <div class="pane-strip" id="pane-left-strip"></div>
               <div id="left-pane-body" class="pane-code" tabindex="0" aria-label="เนื้อหาโค้ดฝั่งซ้าย"></div>
@@ -139,6 +139,7 @@
             </section>
           </div>
 
+          <div id="line-reader-backdrop" class="line-reader-backdrop" hidden onclick="closeMobileSheet()"></div>
           <div id="line-reader" class="line-reader" role="region" aria-label="ตัวอ่านบรรทัดที่เลือก" hidden></div>
         </div>
 
@@ -196,7 +197,15 @@
           <div id="redteam-body" class="summary-grid"></div>
         </div>
 
-        <!-- ---------- โหมดซ้อม: Q&A + Quiz ---------- -->
+        <!-- ---------- โหมดซ้อม: แผนพรีเซนต์ 15 นาที + Q&A + Quiz ---------- -->
+        <div id="pitch-view" class="overlay-view" role="region" aria-label="แผนการพรีเซนต์ 15 นาที">
+          <div class="view-head">
+            <div><h2>แผนการนำเสนอ 15 นาที (2-5-5-3 min Pitch Mode)</h2><p>แบ่งเวลาแม่นยำ · สคริปต์พูดจริง · จุดสาธิตระบบ · แนวทางตอบคำถามให้อาจารย์ทึ่ง</p></div>
+            <button type="button" class="nav-btn" onclick="switchMainView('blocks')">กลับไปดูโค้ด</button>
+          </div>
+          <div id="pitch-body" class="view-body-wide"></div>
+        </div>
+
         <div id="quiz-view" class="overlay-view" role="region" aria-label="ซ้อมตอบและทดสอบ">
           <div class="view-head">
             <div><h2>Defense Q&amp;A &amp; Quiz</h2><p>สคริปต์ตอบอาจารย์ + แบบทดสอบพร้อมเฉลย</p></div>
@@ -204,13 +213,22 @@
           </div>
           <div id="quiz-body" class="view-body-narrow"></div>
         </div>
+
+        <!-- ---------- โหมดสารบัญฟังก์ชันทั้งระบบ (All Functions Directory) ---------- -->
+        <div id="fndex-view" class="overlay-view" role="region" aria-label="สารบัญฟังก์ชันทั้งระบบ">
+          <div class="view-head">
+            <div><h2>สารบัญฟังก์ชันทั้งระบบ (Full Function Directory)</h2><p>รวมฟังก์ชันทุกตัวทั้ง 10 ไฟล์ · ใครรับผิดชอบ · อยู่บรรทัดไหน · กดส่องโค้ดได้ทันที</p></div>
+            <button type="button" class="nav-btn" onclick="switchMainView('blocks')">กลับไปดูโค้ด</button>
+          </div>
+          <div id="fndex-body" class="view-body-wide"></div>
+        </div>
       </main>
     </div>
 
     <!-- ================= Context rail (แทน inspector dock เดิม) ================= -->
     <aside id="inspector" class="context-rail" aria-label="บริบทไฟล์และสเต็ป">
       <div class="flex shrink-0 items-center gap-2 border-b border-line-soft px-3 py-2">
-        <span class="text-[10.5px] font-bold uppercase tracking-[0.09em] text-ink-faint">บริบท</span>
+        <span class="text-[12px] font-bold uppercase tracking-[0.09em] text-ink-faint">บริบท</span>
         <button type="button" class="step-btn ml-auto" id="inspector-toggle-btn" onclick="toggleInspector()" aria-label="ย่อหรือขยายแผลข้างขวา" aria-expanded="true">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
         </button>
@@ -219,7 +237,7 @@
         </button>
       </div>
 
-      <div class="flex min-h-0 flex-1 flex-col">
+      <div class="flex min-h-0 flex-1 flex-col" id="inspector-body">
         <div class="shrink-0 px-3 pt-3">
           <div class="step-ribbon" id="step-ribbon"></div>
 
@@ -231,8 +249,8 @@
 
         <div class="shrink-0 border-b border-line-soft px-3 py-3">
           <div class="mb-2 flex items-center gap-2">
-            <span class="text-[10.5px] font-bold uppercase tracking-[0.08em] text-ink-faint">ไฟล์ทั้งชุด</span>
-            <input type="search" id="file-search" class="ml-auto w-[140px] rounded-lg border border-line bg-deep px-2 py-1 text-[11px] text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none" placeholder="ค้นหาไฟล์…" aria-label="ค้นหาไฟล์" oninput="filterFileList(this.value)" onkeydown="fileSearchKey(event)">
+            <span class="text-[12px] font-bold uppercase tracking-[0.08em] text-ink-faint">ไฟล์ทั้งชุด</span>
+            <input type="search" id="file-search" class="ml-auto w-[140px] rounded-lg border border-line bg-deep px-2 py-1 text-[12px] text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none" placeholder="ค้นหาไฟล์…" aria-label="ค้นหาไฟล์" oninput="filterFileList(this.value)" onkeydown="fileSearchKey(event)">
           </div>
           <div id="inspector-right" class="file-directory max-h-[34vh] overflow-y-auto" aria-label="รายการไฟล์ทั้งหมด"></div>
         </div>
@@ -242,12 +260,44 @@
     </aside>
   </div>
 
+  <!-- ================= Quick Code Peek Modal (ดูโค้ดทันใจโดยไม่ต้องสลับหน้า) ================= -->
+  <div id="code-peek-modal" class="code-peek-backdrop" role="dialog" aria-modal="true" aria-label="หน้าต่างส่องโค้ดเร็ว" hidden onclick="if(event.target===this)closeCodePeek()">
+    <div class="code-peek-window">
+      <header class="code-peek-header">
+        <div class="code-peek-title">
+          <span class="file-icon" id="peek-icon" aria-hidden="true">TS</span>
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="font-mono text-[13px] font-bold text-ink" id="peek-filename">pipeline.ts</span>
+              <span class="badge badge-blue" id="peek-line-badge">บรรทัด 120</span>
+              <span class="badge badge-neutral" id="peek-owner-badge">คน 6</span>
+            </div>
+            <div class="text-[12px] text-ink-faint truncate font-mono" id="peek-filepath">src/lib/pipeline.ts</div>
+          </div>
+        </div>
+        <div class="code-peek-actions">
+          <button type="button" class="nav-btn peek-jump-btn" id="peek-full-btn" onclick="openPeekInBlocks()">
+            เปิดในโหมดเจาะสเต็ป ↗
+          </button>
+          <button type="button" class="step-btn" onclick="closeCodePeek()" aria-label="ปิดหน้าต่างส่องโค้ด (Esc)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+      </header>
+      <div class="code-peek-body" id="peek-code-body"></div>
+      <footer class="code-peek-footer">
+        <span class="text-[12px] text-ink-dim">💡 กด <kbd>Esc</kbd> หรือคลิกนอกหน้าต่างเพื่อปิด และอ่านเนื้อหาต่อได้ทันที</span>
+      </footer>
+    </div>
+  </div>
+
   <p id="pin-live" class="sr-only" aria-live="polite"></p>
 
-  <script src="data-code.js?v=22"></script>
-  <script src="data-content.js?v=22"></script>
-  <script src="data-arch.js?v=22"></script>
-  <script src="data-defense.js?v=22"></script>
-  <script src="app.js?v=22"></script>
+  <script src="data-code.js?v=34"></script>
+  <script src="data-content.js?v=34"></script>
+  <script src="data-arch.js?v=34"></script>
+  <script src="data-defense.js?v=34"></script>
+  <script src="data-fndex.js?v=34"></script>
+  <script src="app.js?v=34"></script>
 </body>
 </html>

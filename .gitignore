@@ -1,2 +1,8 @@
 _backup_20261006/
+_deploy/
 .DS_Store
+.freebuff/
+.netlify/
+*.zip
+deploy_netlify.js
+compare_code.js

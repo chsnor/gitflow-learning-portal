@@ -46,11 +46,15 @@ let currentRightTab = "github";
 let currentMobilePane = "pipeline";
 let focusedPane = "left";        // ฝั่งที่แผลข้างขวาจะอธิบาย
 let fileQuery = "";              // คำค้นในรายการไฟล์
-let pinnedLine = null;    // { file, line } — บรรทัดที่ผู้ใช้กดปักหมุดไว้ (ครอบคลุมทั้ง 19 ไฟล์)
+let pinnedLine = null;    // { file, line } — บรรทัดที่ผู้ใช้กดปักหมุดไว้ (ครอบคลุมทั้ง 18 ไฟล์)
+let lineReaderCollapsed = false; // ย่อเก็บตัวอ่านบรรทัดไม่ให้กินพื้นที่จอ
+let lineReaderExpanded = false;  // ขยายดูเต็มตาบน desktop
+let mobileSheetOpen = false;     // เลื่อนขึ้นเป็น Bottom Sheet บนมือถือ
+let mobileSheetTab = "rel";      // แท็บบนมือถือ: "rel" หรือ "code"
 let relExpanded = false;  // ขยายดูไฟล์ที่เกี่ยวข้องชั้นที่ 2 หรือไม่
 const openRelKeys = new Set(); // การ์ดความสัมพันธ์ที่ผู้ใช้กดขยายดูโค้ด
 
-// ===== กราฟความสัมพันธ์ 19 ไฟล์ — คำนวณจากโค้ดจริง (import / path / การเรียกฟังก์ชันข้ามไฟล์) =====
+// ===== กราฟความสัมพันธ์ 18 ไฟล์ — คำนวณจากโค้ดจริง (import / path / การเรียกฟังก์ชันข้ามไฟล์) =====
 let FILE_GRAPH = null;
 const REL_KIND = { import: "import", call: "เรียกฟังก์ชัน", path: "อ้าง path" };
 
@@ -139,7 +143,7 @@ function buildFileGraph() {
         specifierToKeys(mm[1], pathOf[m.key], byPath).forEach((k) => addEdge(m.key, k, lineNo, "import", null));
       }
 
-      // (2) สตริงที่พูดถึง path ของไฟล์อื่นใน 19 ไฟล์ (เช่น 'src/components/MemberItem.tsx')
+      // (2) สตริงที่พูดถึง path ของไฟล์อื่นใน 18 ไฟล์ (เช่น 'src/components/MemberItem.tsx')
       const litRe = /['"`]([^'"`\s]*?)['"`]/g;
       while ((mm = litRe.exec(text)) !== null) {
         const target = specifierToKeys(mm[1], pathOf[m.key], byPath);
@@ -238,7 +242,12 @@ window.toggleRelDepth = toggleRelDepth;
 function openRelated(fileKey, line) {
   const meta = FILE_META.find((f) => f.key === fileKey);
   if (!meta) return;
-  switchFileTab(meta.pane, fileKey);
+  if (window.innerWidth < 1024) {
+    switchMobilePane(fileKey);
+    closeMobileSheet();
+  } else {
+    switchFileTab(meta.pane, fileKey);
+  }
   pinLine(fileKey, line);
 }
 window.openRelated = openRelated;
@@ -250,17 +259,19 @@ const VIEW_TITLES = {
   cicd: ["CI/CD & Dockerfile", "ถอดรหัส ci.yml ตัวจริง — Targeted Test ด้วย Regex feat/person-X"],
   redteam: ["Red Team Insights", "6 จุดเสี่ยงจากสายตาแฮ็กเกอร์ และจุดที่คน 6 ป้องกันไว้"],
   arch: ["สถาปัตยกรรมเชิงลึก", "7 ชั้น · ทุกจุดตัดสินใจ · ทุกเคสพลาด · วิธีเรนเดอร์"],
+  fndex: ["สารบัญฟังก์ชันทั้งระบบ", "ครบทุกฟังก์ชันทั้ง 10 ไฟล์ · ใครรับผิดชอบ · เลขบรรทัดจริง · ส่องโค้ดได้ทันที"],
   deep: ["ป้องกันงานลึก", "ทำไมเลือกแบบนี้ · ไลบรารีตัวเลือก · แผนต่อยอด"],
+  pitch: ["แผนการนำเสนอ 15 นาที", "แบ่งเวลา 2 / 5 / 5 / 3 นาที · สคริปต์พูดจริง · จุดเดโม่ · แนวทางตอบคำถาม"],
   quiz: ["Defense Q&A & Quiz", "สคริปต์ตอบอาจารย์ 5 ข้อ + แบบทดสอบพร้อมเฉลย"]
 };
 
-// ===== 4 โหมด — รวมมุมมองเดิม 8 อันเป็น "หมวดย่อย" ของแต่ละโหมด =====
+// ===== 4 โหมด — รวมมุมมองเดิม 9 อันเป็น "หมวดย่อย" ของแต่ละโหมด =====
 // section id เดิมทั้งหมดยังเรียกผ่าน switchMainView('...') ได้ตามปกติ
 const MODES = {
   blocks: { btn: "nav-blocks", sections: [{ id: "blocks", label: "โค้ดคู่ขนาน" }, { id: "summary", label: "ภาพรวบ 6 สเต็ป" }] },
   sim:    { btn: "nav-sim",    sections: [{ id: "sim", label: "ไทม์ไลน์ 10 จังหวะ" }] },
-  system: { btn: "nav-arch",   sections: [{ id: "arch", label: "สถาปัตยกรรม" }, { id: "cicd", label: "CI/CD" }, { id: "redteam", label: "Red Team" }, { id: "deep", label: "ป้องกันงานลึก" }] },
-  drill:  { btn: "nav-quiz",   sections: [{ id: "quiz", label: "Q&A + แบบทดสอบ" }] }
+  system: { btn: "nav-arch",   sections: [{ id: "arch", label: "สถาปัตยกรรม" }, { id: "fndex", label: "สารบัญฟังก์ชัน (ครบทุกตัว)" }, { id: "cicd", label: "CI/CD" }, { id: "redteam", label: "Red Team" }, { id: "deep", label: "ป้องกันงานลึก" }] },
+  drill:  { btn: "nav-quiz",   sections: [{ id: "pitch", label: "แผนพรีเซนต์ 15 นาที" }, { id: "quiz", label: "Q&A + แบบทดสอบ" }] }
 };
 const SECTION_MODE = {};
 Object.entries(MODES).forEach(([m, cfg]) => cfg.sections.forEach((s) => { SECTION_MODE[s.id] = m; }));
@@ -430,7 +441,7 @@ function scrollToLine(fileType, startLine, targetLine) {
   }
 }
 
-// ===== ปักหมุดบรรทัด: กดที่บรรทัดไหนก็ได้ (ครบ 19 ไฟล์) = ไฮไลต์ + ตัวอ่านขยาย =====
+// ===== ปักหมุดบรรทัด: กดที่บรรทัดไหนก็ได้ (ครบ 18 ไฟล์) = ไฮไลต์ + ตัวอ่านขยาย =====
 const PIN_CONTEXT = 8; // จำนวนบรรทัดบริบทรอบบรรทัดเป้าหมาย
 
 // จำนวนบรรทัดจริง — ตัดแถวว่างท้ายไฟล์ทิ้งทั้งหมด ไม่ใช่แค่แถวสุดท้าย
@@ -483,9 +494,12 @@ function applyPinHighlight(fileKey) {
 
 function clearPinned() {
   pinnedLine = null;
+  mobileSheetOpen = false;
   applyPinHighlight();
   const el = document.getElementById("line-reader");
   if (el) { el.hidden = true; el.innerHTML = ""; }
+  const backdrop = document.getElementById("line-reader-backdrop");
+  if (backdrop) backdrop.hidden = true;
   announcePin();
 }
 window.clearPinned = clearPinned;
@@ -569,10 +583,49 @@ function relGroupHTML(title, list, note) {
     </div>`;
 }
 
+function openMobileSheet() {
+  mobileSheetOpen = true;
+  mobileSheetTab = "rel";
+  renderLineReader();
+}
+window.openMobileSheet = openMobileSheet;
+
+function closeMobileSheet() {
+  mobileSheetOpen = false;
+  renderLineReader();
+}
+window.closeMobileSheet = closeMobileSheet;
+
+function switchMobileSheetTab(tab) {
+  mobileSheetTab = tab;
+  renderLineReader();
+}
+window.switchMobileSheetTab = switchMobileSheetTab;
+
+function toggleLineReaderExpand() {
+  lineReaderExpanded = !lineReaderExpanded;
+  if (lineReaderExpanded) lineReaderCollapsed = false;
+  renderLineReader();
+}
+window.toggleLineReaderExpand = toggleLineReaderExpand;
+
+function toggleLineReaderCollapse() {
+  lineReaderCollapsed = !lineReaderCollapsed;
+  if (lineReaderCollapsed) lineReaderExpanded = false;
+  renderLineReader();
+}
+window.toggleLineReaderCollapse = toggleLineReaderCollapse;
+
 function renderLineReader() {
   const el = document.getElementById("line-reader");
+  const backdrop = document.getElementById("line-reader-backdrop");
   if (!el) return;
-  if (!pinnedLine) { el.hidden = true; el.innerHTML = ""; return; }
+  if (!pinnedLine) {
+    el.hidden = true;
+    el.innerHTML = "";
+    if (backdrop) backdrop.hidden = true;
+    return;
+  }
 
   const prevScroll = el.querySelector(".reader-rel") ? el.querySelector(".reader-rel").scrollTop : 0;
 
@@ -605,39 +658,63 @@ function renderLineReader() {
   const relatedCount = new Set([...outList, ...inList, ...(showSecond ? secondList : [])].map((r) => r.file)).size;
 
   el.innerHTML = `
-    <div class="reader-head">
+    <div class="mobile-sheet-handle lg:hidden" aria-hidden="true"></div>
+    <div class="reader-head" onclick="if(window.innerWidth<1024 && !mobileSheetOpen)openMobileSheet();">
       <span class="file-icon${meta.icon === "CSS" ? " css-icon" : ""}" aria-hidden="true">${meta.icon}</span>
       <span class="reader-name">${meta.name}</span>
       <span class="reader-line">บรรทัด ${line} / ${total}</span>
-      ${relatedCount ? `<span class="badge badge-blue">${relatedCount} ไฟล์ที่เกี่ยวข้อง</span>` : ""}
+      ${relatedCount ? `<span class="badge badge-blue">${relatedCount} ไฟล์เชื่อมโยง</span>` : ""}
       <span class="reader-owner" style="color:${ownerColor}">${esc(meta.badge)}</span>
-      ${isOpenInPane ? "" : `<button type="button" class="nav-btn reader-btn" onclick="openFileFromList('${meta.key}')">เปิด ${esc(meta.name)} ใน pane →</button>`}
-      ${secondList.length ? `<button type="button" class="reader-toggle" onclick="toggleRelDepth()" aria-expanded="${relExpanded}">${relExpanded ? "ซ่อนชั้นที่ 2" : `ดูอีก ${secondList.length} ไฟล์ (ชั้นที่ 2)`}</button>` : ""}
-      <button type="button" class="reader-close" onclick="clearPinned()" aria-label="ปิดตัวอ่านบรรทัด">✕</button>
+      ${isOpenInPane ? "" : `<button type="button" class="nav-btn reader-btn hidden lg:inline-flex" onclick="openFileFromList('${meta.key}')">เปิดใน pane →</button>`}
+      ${secondList.length ? `<button type="button" class="reader-toggle hidden lg:inline-flex" onclick="toggleRelDepth()" aria-expanded="${relExpanded}">${relExpanded ? "ซ่อนชั้นที่ 2" : `+${secondList.length} ชั้นที่ 2`}</button>` : ""}
+      <div class="reader-actions ml-auto flex items-center gap-1.5">
+        <button type="button" class="nav-btn reader-btn lg:hidden mobile-open-sheet-btn" onclick="openMobileSheet()">ดูรายละเอียด ↗</button>
+        <button type="button" class="step-btn reader-expand-btn hidden lg:grid" onclick="toggleLineReaderExpand()" aria-label="${lineReaderExpanded ? "ย่อขนาดลง" : "ขยายดูเต็มตา"}" title="${lineReaderExpanded ? "ย่อขนาดลง" : "ขยายดูเต็มตา"}">
+          <svg viewBox="0 0 24 24" style="width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2.2;" aria-hidden="true">
+            ${lineReaderExpanded ? '<path d="M4 14h6v6m10-10h-6V4M10 14 3 21m11-11 7-7"/>' : '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>'}
+          </svg>
+        </button>
+        <button type="button" class="step-btn reader-collapse-btn hidden lg:grid" onclick="toggleLineReaderCollapse()" aria-label="${lineReaderCollapsed ? "ขยายตัวอ่านบรรทัด" : "ย่อตัวอ่านบรรทัด"}" title="${lineReaderCollapsed ? "ขยายตัวอ่านบรรทัด" : "ย่อตัวอ่านบรรทัด"}">
+          <svg viewBox="0 0 24 24" style="width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2.2;" aria-hidden="true">
+            ${lineReaderCollapsed ? '<path d="m18 15-6-6-6 6"/>' : '<path d="m6 9 6 6 6-6"/>'}
+          </svg>
+        </button>
+        <button type="button" class="reader-close" onclick="${mobileSheetOpen ? 'closeMobileSheet()' : 'clearPinned()'}" aria-label="ปิดตัวอ่านบรรทัด" title="${mobileSheetOpen ? 'ปิดหน้ารายละเอียด' : 'ปิด (Esc)'}">✕</button>
+      </div>
+    </div>
+    <div class="mobile-sheet-tabs lg:hidden" role="tablist">
+      <button type="button" class="mobile-tab-pill${mobileSheetTab === "rel" ? " active" : ""}" onclick="switchMobileSheetTab('rel')">🔗 ความสัมพันธ์ (${relatedCount} ไฟล์)</button>
+      <button type="button" class="mobile-tab-pill${mobileSheetTab === "code" ? " active" : ""}" onclick="switchMobileSheetTab('code')">📄 โค้ดรอบบรรทัด ${line}</button>
     </div>
     <div class="reader-focus">${esc(clicked) || "<em>— บรรทัดว่าง —</em>"}</div>
-    <div class="reader-body" id="reader-body">${rows.join("")}</div>
-    <div class="reader-rel" id="reader-rel">
-      ${relatedCount === 0
-        ? `<p class="rel-empty">ไฟล์นี้ไม่มีการเรียก/อ้างถึงไฟล์อื่นในชุด 19 ไฟล์ (หรือเป็นไฟล์ที่ทุกคน import)</p>`
-        : `${relGroupHTML(rel.exact ? "ไฟล์ที่บรรทัดนี้เรียกใช้" : "ไฟล์ที่ทั้งไฟล์นี้เรียกใช้", outList)}${relGroupHTML(rel.exact ? "ไฟล์ที่เรียกบรรทัดนี้" : "ไฟล์ที่เรียกไฟล์นี้", inList)}${showSecond ? relGroupHTML("เชื่อมโยงชั้นที่ 2", secondList) : ""}`}
-    </div>
-    <div class="reader-foot">
-      <span class="reader-hint"><kbd>↑</kbd><kbd>↓</kbd> อ่านต่อ · <kbd>Shift</kbd> 10 บรรทัด · <kbd>Esc</kbd> ปิด</span>
-      <span class="reader-actions">
-        ${stepHit >= 0 ? `<button type="button" class="nav-btn reader-btn" onclick="switchMainView('blocks'); selectStep(${stepHit});">ไปสเต็ป ${stepHit + 1}</button>` : ""}
-        ${simHit >= 0 ? `<button type="button" class="nav-btn reader-btn" onclick="switchMainView('sim'); simGo(${simHit});">ไปจังหวะซิมู ${simHit + 1}</button>` : ""}
-      </span>
-    </div>
-    <div class="reader-path">${meta.bc}</div>`;
+    <div class="reader-content-wrap" id="reader-content-wrap">
+      <div class="reader-body" id="reader-body">${rows.join("")}</div>
+      <div class="reader-rel" id="reader-rel">
+        ${relatedCount === 0
+          ? `<p class="rel-empty">ไฟล์นี้ไม่มีการเรียก/อ้างถึงไฟล์อื่นในชุด 18 ไฟล์ (หรือเป็นไฟล์ที่ทุกคน import)</p>`
+          : `${relGroupHTML(rel.exact ? "ไฟล์ที่บรรทัดนี้เรียกใช้" : "ไฟล์ที่ทั้งไฟล์นี้เรียกใช้", outList)}${relGroupHTML(rel.exact ? "ไฟล์ที่เรียกบรรทัดนี้" : "ไฟล์ที่เรียกไฟล์นี้", inList)}${showSecond ? relGroupHTML("เชื่อมโยงชั้นที่ 2", secondList) : ""}`}
+      </div>
+      <div class="reader-foot">
+        <span class="reader-hint"><kbd>↑</kbd><kbd>↓</kbd> อ่านต่อ · <kbd>Shift</kbd> 10 บรรทัด · <kbd>Esc</kbd> ปิด</span>
+        <span class="reader-actions">
+          ${stepHit >= 0 ? `<button type="button" class="nav-btn reader-btn" onclick="switchMainView('blocks'); selectStep(${stepHit});">ไปสเต็ป ${stepHit + 1}</button>` : ""}
+          ${simHit >= 0 ? `<button type="button" class="nav-btn reader-btn" onclick="switchMainView('sim'); simGo(${simHit});">ไปจังหวะซิมู ${simHit + 1}</button>` : ""}
+        </span>
+      </div>
+      <div class="reader-path">${meta.bc}</div>
+    </div>`;
+
   el.hidden = false;
-  el.className = "line-reader";   // ตัวอ่านเป็น bottom sheet ใน flow ไม่ลอยทับโค้ด
+  el.className = `line-reader${lineReaderCollapsed ? " line-reader-collapsed" : ""}${lineReaderExpanded ? " line-reader-expanded" : ""}${mobileSheetOpen ? " mobile-sheet-open" : ""}`;
+  el.setAttribute("data-mobile-tab", mobileSheetTab);
+
+  if (backdrop) backdrop.hidden = !mobileSheetOpen;
 
   const body = document.getElementById("reader-body");
   const target = body && body.querySelector(".reader-target");
-  if (body && target) body.scrollTop = Math.max(0, target.offsetTop - body.clientHeight / 2 + target.offsetHeight / 2);
+  if (body && target && !lineReaderCollapsed) body.scrollTop = Math.max(0, target.offsetTop - body.clientHeight / 2 + target.offsetHeight / 2);
   const relBox = document.getElementById("reader-rel");
-  if (relBox && prevScroll) relBox.scrollTop = prevScroll;
+  if (relBox && prevScroll && !lineReaderCollapsed) relBox.scrollTop = prevScroll;
 }
 window.renderLineReader = renderLineReader;
 
@@ -705,7 +782,7 @@ function renderStepUI() {
   renderStepRibbon();
 }
 
-// ===== Inspector: บทวิเคราะห์รายไฟล์ (ครอบคลุมทั้ง 19 ไฟล์จาก FILE_GUIDES) =====
+// ===== Inspector: บทวิเคราะห์รายไฟล์ (ครอบคลุมทั้ง 18 ไฟล์จาก FILE_GUIDES) =====
 function formatMechanicsLines(rawText) {
   if (!rawText) return "";
   return rawText.split("\n").map((line) => {
@@ -821,9 +898,13 @@ window.focusFileList = focusFileList;
 function toggleContextRail() {
   const rail = document.getElementById("inspector");
   if (!rail) return;
-  rail.classList.remove("inspector-hidden");
-  const open = rail.classList.toggle("rail-open");
-  rail.setAttribute("aria-expanded", String(open));
+  if (window.innerWidth >= 1280) {
+    toggleInspector();
+  } else {
+    rail.classList.remove("inspector-hidden");
+    const open = rail.classList.toggle("rail-open");
+    rail.setAttribute("aria-expanded", String(open));
+  }
 }
 window.toggleContextRail = toggleContextRail;
 
@@ -899,25 +980,33 @@ function switchMainView(section) {
     renderRedteamView();
   } else if (sec === "quiz") {
     renderQuizView();
+  } else if (sec === "pitch") {
+    renderPitchView();
   } else if (sec === "arch") {
     renderArchView();
+  } else if (sec === "fndex") {
+    renderFndexView();
   } else if (sec === "deep") {
     renderDeepView();
   }
 }
 window.switchMainView = switchMainView;
 
-// ===== Mobile (จอเล็ก: โชว์ pane เดียว + แถบเลือกไฟล์ 19 ไฟล์) =====
+// ===== Mobile (จอเล็ก: โชว์ pane เดียว + แถบเลือกไฟล์ 18 ไฟล์) =====
 function renderMobileTabs() {
   const bar = document.getElementById("mobile-pane-switcher");
   if (!bar) return;
   bar.innerHTML = FILE_META.map((f) => {
     const active = currentMobilePane === f.key;
+    const ownerColor = personColor(f.badge);
     return `<button type="button" class="mobile-tab-btn${active ? " active" : ""}" role="tab" aria-selected="${active}" onclick="switchMobilePane('${f.key}')">
       <span class="file-icon${f.icon === "CSS" ? " css-icon" : ""}" aria-hidden="true">${f.icon}</span>
       <span>${f.name}</span>
+      <span class="badge badge-xs" style="color:${ownerColor}; background:color-mix(in oklab, ${ownerColor} 14%, transparent); border-color:color-mix(in oklab, ${ownerColor} 30%, transparent);">${esc(f.badge)}</span>
     </button>`;
   }).join("");
+  const activeBtn = bar.querySelector(".mobile-tab-btn.active");
+  if (activeBtn) activeBtn.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
 }
 
 function switchMobilePane(key) {
@@ -1065,10 +1154,107 @@ function renderSimulatorView() {
     </div>`;
 }
 
-// ===== Jump: เด้งไปไฟล์ + บรรทัดจริง (ใช้ทั้งซิมูและ Q&A) =====
-function jumpToCodeLine(fileKey, line, syncStep = true) {
+// ===== Quick Code Peek Modal (ส่องโค้ดเร็วโดยไม่ต้องสลับหน้า) =====
+let peekState = null;
+
+function peekCode(fileKey, targetLine) {
   const meta = FILE_META.find((f) => f.key === fileKey);
   if (!meta) return;
+
+  const modal = document.getElementById("code-peek-modal");
+  if (!modal) return;
+
+  peekState = { fileKey, targetLine, fromView: currentMainView };
+
+  // Set modal header info
+  const iconEl = document.getElementById("peek-icon");
+  if (iconEl) {
+    iconEl.textContent = meta.icon;
+    iconEl.className = `file-icon${meta.icon === "CSS" ? " css-icon" : ""}`;
+  }
+  const nameEl = document.getElementById("peek-filename");
+  if (nameEl) nameEl.textContent = meta.name;
+
+  const lineBadge = document.getElementById("peek-line-badge");
+  if (lineBadge) lineBadge.textContent = `บรรทัด ${targetLine}`;
+
+  const ownerBadge = document.getElementById("peek-owner-badge");
+  if (ownerBadge) {
+    ownerBadge.textContent = meta.badge;
+    ownerBadge.style.color = personColor(meta.badge);
+  }
+
+  const pathEl = document.getElementById("peek-filepath");
+  if (pathEl) pathEl.textContent = meta.bc || meta.name;
+
+  // Render surrounding code context
+  const bodyEl = document.getElementById("peek-code-body");
+  if (bodyEl) {
+    const lines = meta.raw.split("\n");
+    const total = lines.length;
+    const pad = 24; // show +-24 lines around target
+    const start = Math.max(1, targetLine - pad);
+    const end = Math.min(total, targetLine + pad);
+
+    const rows = [];
+    for (let n = start; n <= end; n++) {
+      const isTarget = n === targetLine;
+      const isNear = Math.abs(n - targetLine) <= 4;
+      let cls = "peek-row";
+      if (isTarget) cls += " peek-target";
+      else if (isNear) cls += " peek-context";
+
+      rows.push(`
+        <div class="${cls}" id="peek-row-${n}">
+          <span class="line-num">${n}</span>
+          <span class="line-code">${highlightTS(lines[n - 1] || "")}</span>
+        </div>
+      `);
+    }
+    bodyEl.innerHTML = rows.join("");
+
+    // Auto-scroll to center target line
+    requestAnimationFrame(() => {
+      const targetRow = document.getElementById(`peek-row-${targetLine}`);
+      if (targetRow && bodyEl) {
+        bodyEl.scrollTop = Math.max(0, targetRow.offsetTop - (bodyEl.clientHeight / 2) + 16);
+      }
+    });
+  }
+
+  modal.hidden = false;
+  document.body.style.overflow = "hidden";
+}
+window.peekCode = peekCode;
+
+function closeCodePeek() {
+  const modal = document.getElementById("code-peek-modal");
+  if (modal) modal.hidden = true;
+  document.body.style.overflow = "";
+  peekState = null;
+}
+window.closeCodePeek = closeCodePeek;
+
+function openPeekInBlocks() {
+  if (!peekState) return;
+  const { fileKey, targetLine } = peekState;
+  closeCodePeek();
+  jumpToCodeLine(fileKey, targetLine, true, true); // force jump to blocks
+}
+window.openPeekInBlocks = openPeekInBlocks;
+
+// ===== Jump: เด้งไปไฟล์ + บรรทัดจริง =====
+// ถ้ามาจาก overlay views (arch, deep, pitch, quiz ฯลฯ) ให้เปิด Quick Peek ก่อน เพื่อไม่ให้ผู้ใช้เสียตำแหน่ง
+function jumpToCodeLine(fileKey, line, syncStep = true, forceBlocks = false) {
+  const meta = FILE_META.find((f) => f.key === fileKey);
+  if (!meta) return;
+
+  // ถ้าอยู่ในโหมดเอกสาร/สถาปัตยกรรม/แผนพรีเซนต์ และไม่ได้บังคับเปิด blocks ให้เปิด Quick Peek ทันที
+  if (!forceBlocks && currentMainView !== "blocks") {
+    peekCode(fileKey, line);
+    return;
+  }
+
   switchMainView("blocks");
   switchFileTab(meta.pane, fileKey);
 
@@ -1149,6 +1335,84 @@ function renderRedteamView() {
       </div>
     </div>`).join("");
 }
+
+// ===== แผนการนำเสนอ 15 นาที (2-5-5-3 min Pitch Mode) =====
+function renderPitchView() {
+  const el = document.getElementById("pitch-body");
+  if (!el) return;
+
+  el.innerHTML = `
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:10px; margin-bottom:16px;">
+      <div class="summary-card" style="border-left:3px solid var(--color-accent);">
+        <div style="font-size:11px; color:var(--color-ink-faint); font-weight:700;">ช่วงที่ 1 · 2 นาที</div>
+        <div style="font-size:14px; font-weight:700; color:var(--color-accent); margin-top:2px;">ที่มา วัตถุประสงค์ ขอบเขต</div>
+        <div style="font-size:11.5px; color:var(--color-ink-dim); margin-top:4px;">ปัญหา App Router, 16 ขยะ, 8 เลเยอร์</div>
+      </div>
+      <div class="summary-card" style="border-left:3px solid var(--color-ok);">
+        <div style="font-size:11px; color:var(--color-ink-faint); font-weight:700;">ช่วงที่ 2 · 5 นาที</div>
+        <div style="font-size:14px; font-weight:700; color:var(--color-ok); margin-top:2px;">สาธิตการใช้งานจริง (Demo)</div>
+        <div style="font-size:11.5px; color:var(--color-ink-dim); margin-top:4px;">Dagre layout, Trace Flow, Side Drawer</div>
+      </div>
+      <div class="summary-card" style="border-left:3px solid var(--color-accent2);">
+        <div style="font-size:11px; color:var(--color-ink-faint); font-weight:700;">ช่วงที่ 3 · 5 นาที</div>
+        <div style="font-size:14px; font-weight:700; color:var(--color-accent2); margin-top:2px;">โครงสร้าง & Flow ของโค้ด</div>
+        <div style="font-size:11.5px; color:var(--color-ink-dim); margin-top:4px;">3 สถาปัตยกรรม, 6 จังหวะ Pipeline, QA 98 ข้อ</div>
+      </div>
+      <div class="summary-card" style="border-left:3px solid var(--color-warn);">
+        <div style="font-size:11px; color:var(--color-ink-faint); font-weight:700;">ช่วงที่ 4 · 3 นาที</div>
+        <div style="font-size:14px; font-weight:700; color:var(--color-warn); margin-top:2px;">ตอบคำถามอาจารย์ (Q&A)</div>
+        <div style="font-size:11.5px; color:var(--color-ink-dim); margin-top:4px;">Map Cache O(1), Regex vs AST, Roadmap</div>
+      </div>
+    </div>
+
+    <div style="display:grid; gap:16px;">
+      ${(typeof PRESENTATION_PLAN !== "undefined" ? PRESENTATION_PLAN : []).map((p, idx) => `
+        <div class="summary-card" style="border-left:4px solid ${idx === 0 ? "var(--color-accent)" : idx === 1 ? "var(--color-ok)" : idx === 2 ? "var(--color-accent2)" : "var(--color-warn)"};">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span class="chip-num" style="background:var(--color-panel2); font-weight:700;">${p.phase}</span>
+              <span style="font-size:16px; font-weight:700; color:var(--color-ink);">${esc(p.title)}</span>
+              <span class="badge badge-blue">${esc(p.time)}</span>
+            </div>
+            <span class="badge badge-neutral" style="font-family:var(--font-mono);">${esc(p.badge)}</span>
+          </div>
+
+          <div style="font-size:12px; color:var(--color-ink-faint); font-weight:600; margin-top:4px;">
+            โฟกัสหลัก: <span style="color:var(--color-ink-dim);">${esc(p.roleFocus)}</span>
+          </div>
+
+          <div style="margin-top:10px; padding:12px 14px; border-radius:10px; background:var(--color-panel2); border:1px solid var(--color-line-soft);">
+            <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--color-accent); margin-bottom:6px; letter-spacing:0.05em;">
+              🎤 บทพูดแนะนำ (Presentation Script)
+            </div>
+            <div style="font-size:12.5px; color:var(--color-ink); line-height:1.75; white-space:pre-line;">
+              ${esc(p.script)}
+            </div>
+          </div>
+
+          <div style="margin-top:10px; display:grid; gap:6px;">
+            <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--color-ink-faint); letter-spacing:0.05em;">
+              📌 ประเด็นสำคัญที่ต้องเน้น (Key Takeaways)
+            </div>
+            <ul style="margin:0; padding-left:18px; font-size:12px; color:var(--color-ink-dim); line-height:1.65; display:grid; gap:3px;">
+              ${p.keyPoints.map((kp) => `<li>${esc(kp)}</li>`).join("")}
+            </ul>
+          </div>
+
+          <div style="margin-top:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; padding-top:10px; border-top:1px solid var(--color-line-soft);">
+            <div style="font-size:12px; color:var(--color-ok); display:flex; align-items:center; gap:6px;">
+              <span>🎯 <strong>การสาธิต:</strong> ${esc(p.demoAction)}</span>
+            </div>
+            <button type="button" class="nav-btn" style="font-size:11.5px; padding:5px 12px; border-color:var(--color-accent); color:var(--color-accent);" onclick="jumpToCodeLine('${p.jumpFile}', ${p.jumpLine})">
+              ส่องโค้ดที่เกี่ยวข้อง (${p.jumpFile}.ts) →
+            </button>
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+window.renderPitchView = renderPitchView;
 
 // ===== Defense Q&A + Self-Test Quiz =====
 const quizAnswers = {};
@@ -1261,6 +1525,17 @@ window.addEventListener("keydown", (e) => {
     }
     if (movePin(dir * stepSize)) e.preventDefault();
   } else if (e.key === "Escape") {
+    const peekModal = document.getElementById("code-peek-modal");
+    if (peekModal && !peekModal.hidden) {
+      closeCodePeek();
+      e.preventDefault();
+      return;
+    }
+    if (mobileSheetOpen) {
+      closeMobileSheet();
+      e.preventDefault();
+      return;
+    }
     const rail = document.getElementById("inspector");
     if (rail && rail.classList.contains("rail-open")) { rail.classList.remove("rail-open"); e.preventDefault(); }
     else if (pinnedLine) { clearPinned(); e.preventDefault(); }
@@ -1270,7 +1545,7 @@ window.addEventListener("keydown", (e) => {
 // ===== Init (ชุดเดียว) =====
 window.addEventListener("DOMContentLoaded", () => {
   initFileMeta();       // สร้าง FILE_META ก่อนใช้งาน (อ้างอิง RAW_* จาก data-code.js)
-  buildFileGraph();     // กราฟความสัมพันธ์ 19 ไฟล์ คำนวณจากโค้ดจริง
+  buildFileGraph();     // กราฟความสัมพันธ์ 18 ไฟล์ คำนวณจากโค้ดจริง
   renderCodePanes();    // โค้ด 2 pane + หัว pane + แผลข้างขวา
   renderSummaryView();
   renderMobileTabs();
@@ -1368,6 +1643,44 @@ function renderArchView() {
       </div>
     </section>
     <section class="arch-table-card">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <h3 style="margin:0; font-size:15px; color:var(--color-accent);">🔍 ดัชนีฟังก์ชันและฟีเจอร์เด่นฝั่ง UI (ตอบอาจารย์เจาะจงรายจุด)</h3>
+        <span class="badge badge-blue">ค้นหา · กรองประเภท · Trace · MiniMap</span>
+      </div>
+      <p style="margin:4px 0 10px; font-size:12px; color:var(--color-ink-dim); line-height:1.6;">
+        รวบรวมฟังก์ชันและโค้ดของฟีเจอร์ยิบย่อยบนหน้าเว็บจริง (เช่น กล่องค้นหาโหนด Ctrl+K, แถบกรองไฟล์ ALL/PAGE/ACTION, ปุ่มสลับ MiniMap/Trace) สามารถกดปุ่มเพื่อดูตำแหน่งโค้ดจริงได้ทันที
+      </p>
+      <div style="display:grid; gap:12px;">
+        ${(typeof UI_FEATURES_INDEX !== "undefined" ? UI_FEATURES_INDEX : []).map((cat) => `
+          <div style="border:1px solid var(--color-line-soft); border-radius:10px; padding:12px; background:var(--color-deep);">
+            <div style="font-size:12.5px; font-weight:700; color:var(--color-ink); margin-bottom:8px; display:flex; align-items:center; gap:6px;">
+              <span style="color:var(--color-accent);">📁</span> ${esc(cat.category)}
+            </div>
+            <div style="display:grid; gap:8px;">
+              ${cat.items.map((it) => {
+                const ref = FILE_META.find((f) => f.key === it.file);
+                return `
+                  <div style="display:flex; flex-direction:column; gap:4px; padding:8px 10px; background:var(--color-panel); border:1px solid var(--color-line-soft); border-radius:8px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+                      <div style="display:flex; align-items:center; gap:8px;">
+                        <span style="font-size:12.5px; font-weight:600; color:var(--color-ink);">${esc(it.name)}</span>
+                        ${it.shortcut ? `<span class="badge badge-neutral" style="font-size:10px; font-family:var(--font-mono);">${esc(it.shortcut)}</span>` : ""}
+                      </div>
+                      <button type="button" class="nav-btn peek-jump-btn" style="font-size:11px; padding:3px 8px;" onclick="jumpToCodeLine('${it.file}', ${it.line})">
+                        ${ref ? esc(ref.name) : it.file}:${it.line} ส่องโค้ด →
+                      </button>
+                    </div>
+                    <div style="font-size:11.5px; color:var(--color-ink-dim); line-height:1.55;">${esc(it.desc)}</div>
+                    ${it.codeSnippet ? `<code style="font-size:11px; color:var(--color-accent2); background:var(--color-deep); padding:3px 6px; border-radius:5px; border:1px solid var(--color-line-soft); overflow-x:auto; white-space:nowrap; display:block;">${esc(it.codeSnippet)}</code>` : ""}
+                  </div>
+                `;
+              }).join("")}
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+    <section class="arch-table-card">
       <h3>คำถามที่อาจารย์อาจถามเรื่องตัวพอร์ทัลนี้</h3>
       ${PORTAL_QA.map((q) => `<div class="layer-qa"><strong>${esc(q.q)}</strong><span>${esc(q.a)}</span></div>`).join("")}
     </section>`;
@@ -1417,3 +1730,136 @@ function renderDeepView() {
       ${PORTAL_QA.map((q) => `<div class="layer-qa"><strong>${esc(q.q)}</strong><span>${esc(q.a)}</span></div>`).join("")}
     </section>`;
 }
+
+// ===== สารบัญฟังก์ชันทั้งระบบ (All Functions Directory) =====
+let fndexSearchQuery = "";
+let fndexSelectedOwner = "all";
+
+function filterFndex(query, owner) {
+  if (query !== undefined) fndexSearchQuery = query.toLowerCase().trim();
+  if (owner !== undefined) fndexSelectedOwner = owner;
+  renderFndexList();
+}
+window.filterFndex = filterFndex;
+
+function renderFndexList() {
+  const container = document.getElementById("fndex-items-container");
+  const countEl = document.getElementById("fndex-count-badge");
+  if (!container) return;
+
+  const list = (typeof ALL_FUNCTIONS_DIRECTORY !== "undefined" ? ALL_FUNCTIONS_DIRECTORY : []);
+  const filtered = list.filter((fn) => {
+    if (fndexSelectedOwner !== "all" && fn.owner !== fndexSelectedOwner) return false;
+    if (!fndexSearchQuery) return true;
+    const matchName = fn.name.toLowerCase().includes(fndexSearchQuery);
+    const matchFile = fn.filePath.toLowerCase().includes(fndexSearchQuery);
+    const matchDesc = fn.desc.toLowerCase().includes(fndexSearchQuery);
+    const matchCat = fn.category.toLowerCase().includes(fndexSearchQuery);
+    const matchTags = (fn.tags || []).some((t) => t.toLowerCase().includes(fndexSearchQuery));
+    return matchName || matchFile || matchDesc || matchCat || matchTags;
+  });
+
+  if (countEl) {
+    countEl.textContent = `พบ ${filtered.length} / ${list.length} ฟังก์ชัน`;
+  }
+
+  if (filtered.length === 0) {
+    container.innerHTML = `
+      <div style="grid-column: 1 / -1; padding: 48px 24px; text-align: center; color: var(--color-ink-dim); background: var(--color-panel2); border-radius: 12px; border: 1px dashed var(--color-line-soft);">
+        <p style="font-size: 15px; font-weight: 600; margin-bottom: 6px;">🔍 ไม่พบฟังก์ชันที่ตรงกับคำค้นหา "${esc(fndexSearchQuery)}"</p>
+        <p style="font-size: 12px;">ลองเปลี่ยนคำค้น เช่น <kbd>filter</kbd>, <kbd>layout</kbd>, <kbd>cache</kbd>, <kbd>route</kbd> หรือเลือกชิปกรองคนอื่น</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = filtered.map((fn) => {
+    const color = personColor(fn.badge);
+    return `
+      <article class="fndex-card" style="display:flex; flex-direction:column; gap:10px; background:var(--color-panel2); border:1px solid var(--color-line-soft); border-radius:10px; padding:14px; transition:border-color .15s ease;">
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:10px;">
+          <div>
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px; flex-wrap:wrap;">
+              <strong style="font-size:14px; font-family:var(--font-mono); color:var(--color-ink);">${esc(fn.name)}</strong>
+              <span style="font-size:10.5px; font-weight:700; color:${color}; background:color-mix(in oklab, ${color} 15%, transparent); padding:2px 7px; border-radius:999px;">${esc(fn.badge)}</span>
+              <span style="font-size:10.5px; color:var(--color-ink-faint); font-family:var(--font-mono);">${esc(fn.filePath)}:<strong>${fn.line}</strong></span>
+            </div>
+            <div style="font-size:11px; color:var(--color-ink-faint);">${esc(fn.category)}</div>
+          </div>
+          <button type="button" class="nav-btn" style="font-size:11px; padding:4px 9px; flex-shrink:0;" onclick="jumpToCodeLine('${fn.file}', ${fn.line})">
+            ส่องโค้ด ↗
+          </button>
+        </div>
+
+        <div style="font-size:12px; color:var(--color-ink-dim); line-height:1.55;">
+          ${esc(fn.desc)}
+        </div>
+
+        <div style="margin-top:auto; padding-top:6px; border-top:1px solid var(--color-line-soft); display:flex; items-center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+          <code style="font-size:11px; color:var(--color-accent2); background:var(--color-deep); padding:2px 6px; border-radius:4px; border:1px solid var(--color-line-soft); max-width:100%; overflow-x:auto; white-space:nowrap; display:block;">
+            ${esc(fn.signature)}
+          </code>
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+function renderFndexView() {
+  const el = document.getElementById("fndex-body");
+  if (!el) return;
+
+  const owners = [
+    { id: "all", label: "ทั้งหมด (50 ฟังก์ชัน)" },
+    { id: "คน 1", label: "คน 1: GitHub Service (5)" },
+    { id: "คน 2", label: "คน 2: Parser Engine (6)" },
+    { id: "คน 3", label: "คน 3: Flow Generator & Canvas (10)" },
+    { id: "คน 4", label: "คน 4: Dashboard & FlowExplorer (13)" },
+    { id: "คน 5", label: "คน 5: Side Drawer & Code Viewer (7)" },
+    { id: "คน 6", label: "คน 6: Core Pipeline & Route (9)" }
+  ];
+
+  el.innerHTML = `
+    <div style="display:flex; flex-direction:column; gap:16px;">
+      <!-- แถบค้นหาและชิปตัวกรอง -->
+      <div style="background:var(--color-panel); border:1px solid var(--color-line-soft); border-radius:12px; padding:16px; display:flex; flex-direction:column; gap:12px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:240px; position:relative;">
+            <input
+              type="search"
+              id="fndex-search-input"
+              placeholder="ค้นหาชื่อฟังก์ชัน เช่น filter, layout, cache, route หรือคำอธิบาย..."
+              value="${esc(fndexSearchQuery)}"
+              oninput="filterFndex(this.value, undefined)"
+              style="width:100%; background:var(--color-deep); border:1px solid var(--color-line); border-radius:8px; padding:8px 12px; font-size:13px; color:var(--color-ink); outline:none;"
+            />
+          </div>
+          <span id="fndex-count-badge" style="font-size:12px; color:var(--color-ink-dim); font-weight:600;">
+            กำลังโหลด...
+          </span>
+        </div>
+
+        <div style="display:flex; gap:6px; flex-wrap:wrap;" role="tablist" aria-label="กรองตามผู้รับผิดชอบ">
+          ${owners.map((o) => `
+            <button
+              type="button"
+              class="side-chip"
+              onclick="filterFndex(undefined, '${o.id}')"
+              aria-pressed="${fndexSelectedOwner === o.id}"
+              style="font-size:11.5px; padding:4px 10px;"
+            >
+              ${esc(o.label)}
+            </button>
+          `).join("")}
+        </div>
+      </div>
+
+      <!-- รายการฟังก์ชันทั้งหมด -->
+      <div id="fndex-items-container" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); gap:12px;"></div>
+    </div>
+  `;
+
+  renderFndexList();
+}
+window.renderFndexView = renderFndexView;
+
