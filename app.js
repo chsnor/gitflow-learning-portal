@@ -255,7 +255,7 @@ window.openRelated = openRelated;
 const VIEW_TITLES = {
   blocks: ["เจาะสเต็ป — โค้ดจริงคู่ขนาน", "ซ้าย = งานคน 6 · ขวา = โมดูลเพื่อนที่ถูกเรียก"],
   summary: ["ภาพรวมสถาปัตยกรรม", "โฟลว์ 6 สเต็ปของคน 6 ที่เชื่อมคน 1-5 ทั้งหมด"],
-  sim: ["Pipeline Simulator", "10 จังหวะ — ตั้งแต่ผู้ใช้กดปุ่มจนกราฟขึ้นจอ"],
+  sim: ["Pipeline Simulator & Flow Deep Dive", "14 จังหวะ Auto & On-Demand — ครบตั้งแต่กดปุ่มจนถึง BFS Trace & Share State"],
   cicd: ["CI/CD & Dockerfile", "ถอดรหัส ci.yml ตัวจริง — Targeted Test ด้วย Regex feat/person-X"],
   redteam: ["Red Team Insights", "6 จุดเสี่ยงจากสายตาแฮ็กเกอร์ และจุดที่คน 6 ป้องกันไว้"],
   arch: ["สถาปัตยกรรมเชิงลึก", "7 ชั้น · ทุกจุดตัดสินใจ · ทุกเคสพลาด · วิธีเรนเดอร์"],
@@ -269,7 +269,7 @@ const VIEW_TITLES = {
 // section id เดิมทั้งหมดยังเรียกผ่าน switchMainView('...') ได้ตามปกติ
 const MODES = {
   blocks: { btn: "nav-blocks", sections: [{ id: "blocks", label: "โค้ดคู่ขนาน" }, { id: "summary", label: "ภาพรวบ 6 สเต็ป" }] },
-  sim:    { btn: "nav-sim",    sections: [{ id: "sim", label: "ไทม์ไลน์ 10 จังหวะ" }] },
+  sim:    { btn: "nav-sim",    sections: [{ id: "sim", label: "ไทม์ไลน์ 14 จังหวะ" }] },
   system: { btn: "nav-arch",   sections: [{ id: "arch", label: "สถาปัตยกรรม" }, { id: "fndex", label: "สารบัญฟังก์ชัน (ครบทุกตัว)" }, { id: "cicd", label: "CI/CD" }, { id: "redteam", label: "Red Team" }, { id: "deep", label: "ป้องกันงานลึก" }] },
   drill:  { btn: "nav-quiz",   sections: [{ id: "pitch", label: "แผนพรีเซนต์ 15 นาที" }, { id: "quiz", label: "Q&A + แบบทดสอบ" }] }
 };

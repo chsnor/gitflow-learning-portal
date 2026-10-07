@@ -501,6 +501,15 @@ kbd {
 .sim-progress-fill { height: 100%; border-radius: var(--radius-pill); background: linear-gradient(90deg, var(--color-accent), var(--color-accent2)); transition: width .25s ease; }
 .sim-current { display: grid; gap: 7px; padding: 12px 14px; border-radius: var(--radius-card); background: var(--color-panel); border: 1px solid var(--color-line-soft); }
 .actor-badge { font-family: var(--font-mono); font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: var(--radius-pill); white-space: nowrap; }
+
+/* Styling for Rich Deep-Dive Detail in Simulator */
+.sim-detail-content { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.sim-detail-block { padding: 9px 12px; border-radius: 8px; background: var(--color-panel2); border: 1px solid var(--color-line-soft); font-size: 12.5px; line-height: 1.65; color: var(--color-ink-dim); }
+.sim-detail-block .block-label { display: block; font-size: 12px; font-weight: 700; color: var(--color-ink); margin-bottom: 4px; }
+.sim-detail-block ul { margin: 4px 0 0 16px; padding: 0; list-style: disc; }
+.sim-detail-block li { margin-bottom: 3px; color: var(--color-ink-dim); }
+.sim-detail-block li strong { color: var(--color-accent); }
+.sim-detail-block code { font-family: var(--font-mono); font-size: 11.5px; padding: 1px 4px; border-radius: 4px; background: color-mix(in oklab, var(--color-line) 40%, transparent); color: var(--color-accent); }
 .sim-timeline { display: grid; gap: 4px; margin-top: 12px; }
 .sim-step-row {
   display: flex; align-items: center; gap: 10px; padding: 7px 11px; border-radius: 9px;

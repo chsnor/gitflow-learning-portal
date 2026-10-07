@@ -134,83 +134,587 @@ function initFileMeta() {
 }
 
 const SIM_STEPS = [
-  { n: 1, actor: "คน 4", color: "#58a6ff", title: "ผู้ใช้กรอก URL และ Token บนหน้า Dashboard", detail: "ผู้ใช้พิมพ์ลิงก์ GitHub และแนบ Personal Access Token (ถ้ามี) บนหน้า Dashboard (FlowExplorer.tsx) พร้อม Guard ตรวจค่าว่าง", fileRef: "src/components/FlowExplorer.tsx:168" },
-  { n: 2, actor: "คน 4 → คน 6", color: "#58a6ff", title: "ยิงคำขอ POST /api/analyze พร้อม Token", detail: "executeAnalysis() ส่ง fetch แบบ POST พร้อม body { url, token: token?.trim() } และดักจับ Error 401 Bad credentials โดยเฉพาะ", fileRef: "FlowExplorer.tsx:115-128" },
-  { n: 3, actor: "คน 6", color: "#ff7b72", title: "route.ts รับคำขอและตรวจความถูกต้อง", detail: "await req.json() อ่าน body แล้ว Guard Clause เช็ค url หากเกิดข้อผิดพลาด 401 จะส่ง HTTP 401 Unauthorized กลับไปทันที", fileRef: "route.ts:7-27" },
-  { n: 4, actor: "คน 6", color: "#ff7b72", title: "ส่งต่อเข้า runAnalysisPipeline", detail: "route เรียก await runAnalysisPipeline(url, token) มอบหมายงานให้ Orchestrator หลักลงมือประสานงาน", fileRef: "route.ts:19" },
-  { n: 5, actor: "คน 1", color: "#3fb950", title: "แกะ URL → owner/repo", detail: "parseGitHubUrl() ตรวจโดเมน github.com ตัด .git และแยก segment ได้ { owner, repo, branch } พร้อม Fallback Guard (บรรทัด 447-458)", fileRef: "github.ts:15-41" },
-  { n: 6, actor: "คน 6", color: "#ff7b72", title: "เช็กแคชแยกสิทธิ์ (SHA-256 Partition)", detail: "computeCacheKey(githubUrl, effectiveToken) คำนวณคีย์แยกตาม Token Hash ถ้าตรงจะคืนผลลัพธ์ <10ms ป้องกันการปนเปื้อนข้อมูล (บรรทัด 467-474)", fileRef: "pipeline.ts:10, 467-474" },
-  { n: 7, actor: "คน 1 + 6", color: "#3fb950", title: "ยิง GitHub Trees API & ตรวจ Token", detail: "fetchGitHubTree() ยิง Trees API ถ้า Token ผิดจะโยน Error 401 ทันที พร้อมระบบ Fallback 2 ชั้น main->master->default_branch (บรรทัด 348 / 481)", fileRef: "pipeline.ts:348, 481 / github.ts:44-60" },
-  { n: 8, actor: "คน 2", color: "#bc8cff", title: "กรองและจำแนกไฟล์", detail: "filterTreeFiles(treeData, 500) ตัดโฟลเดอร์ขยะ แล้ว detectNextFileType() จำแนกประเภท page/action/middleware/store/component (บรรทัด 489-512)", fileRef: "pipeline.ts:489-512 / parser.ts:101-160" },
-  { n: 9, actor: "คน 2 + 3", color: "#d29922", title: "แกะความสัมพันธ์และวาดกราฟ Dagre", detail: "ดึงโค้ดจริง 45 ไฟล์แรกแบบขนาน แกะ imports/actions เสริมด้วย inferStructuralRelations แล้วส่งให้คนที่ 3 วาดกราฟ Dagre (บรรทัด 521-564)", fileRef: "pipeline.ts:521-564 / generator.ts:89-130" },
-  { n: 10, actor: "คน 6 → คน 4", color: "#ff7b72", title: "บันทึกแคชแยกสิทธิ์ & ส่งผลลัพธ์", detail: "บันทึกลงแคช LRU ด้วย cacheKey (บรรทัด 590) route ตอบ NextResponse.json 200 (บรรทัด 20) ให้ Dashboard แสดงกราฟทันที", fileRef: "pipeline.ts:576-591 / route.ts:20" }
+  {
+    n: 1,
+    actor: "คน 4 (FlowExplorer + UI Helper)",
+    color: "#58a6ff",
+    title: "1. ผู้ใช้กด Submit บนหน้าเว็บ & ตรวจสอบความถูกต้องของ URL",
+    fileRef: "FlowExplorer.tsx:168-171 · ui-helper.ts:4-39",
+    detail: `
+      <div class="sim-detail-content">
+        <div class="sim-detail-block">
+          <strong class="block-label">🎯 หน้าที่ / วัตถุประสงค์:</strong>
+          ดักจับเหตุการณ์การส่งฟอร์มของผู้ใช้ (Submit Form / กด Enter) และส่ง URL ไปตรวจสอบความถูกต้องและความปลอดภัยที่หน้าบ้านทันที เพื่อป้องกันข้อมูลไม่สมบูรณ์และลดภาระเซิร์ฟเวอร์
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
+          <ul>
+            <li><strong>FlowExplorer.tsx บรรทัดที่ 168:</strong> รับ synthetic event <code>e: React.FormEvent</code> ในฟังก์ชัน <code>handleSubmit</code></li>
+            <li><strong>FlowExplorer.tsx บรรทัดที่ 169:</strong> สั่ง <code>e.preventDefault()</code> เพื่อระงับไม่ให้เบราว์เซอร์รีเฟรชหน้าเว็บทั้งหน้า</li>
+            <li><strong>FlowExplorer.tsx บรรทัดที่ 170:</strong> เรียก <code>void executeAnalysis(url, token)</code> เพื่อเริ่มต้นกระบวนการวิเคราะห์</li>
+            <li><strong>ui-helper.ts บรรทัดที่ 5–7:</strong> <code>validateUrlInput</code> ตรวจค่าว่าง หากไม่มีส่งแจ้งเตือน "กรุณากรอก GitHub URL"</li>
+            <li><strong>ui-helper.ts บรรทัดที่ 12–18:</strong> ใช้ <code>new URL(trimmed)</code> สกัด hostname</li>
+            <li><strong>ui-helper.ts บรรทัดที่ 20–26:</strong> สแกนหาโค้ดแปลกปลอมเพื่อป้องกัน XSS (ตรวจจับ <code>&lt;script</code>, <code>javascript:</code>, <code>&lt;</code>, <code>&gt;</code>)</li>
+            <li><strong>ui-helper.ts บรรทัดที่ 28–30:</strong> ตรวจสอบ hostname ต้องเป็น <code>github.com</code> หรือ <code>www.github.com</code> ตรงตัวเท่านั้น</li>
+            <li><strong>ui-helper.ts บรรทัดที่ 32–36:</strong> แยก segment ของ path ตรวจสอบว่าต้องมีทั้งชื่อ Owner และ Repo ครบถ้วน (<code>segments.length &lt; 2</code>)</li>
+            <li><strong>ui-helper.ts บรรทัดที่ 38:</strong> ส่งคืนผลลัพธ์ <code>{ isValid: true, errorMessage: null }</code></li>
+          </ul>
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; Error Guard:</strong>
+          ป้องกันทั้งช่องโหว่ XSS และการกรอกโดเมนปลอม (เช่น <code>evil.com/?x=github.com</code> หรือ <code>evilgithub.com</code>) ตั้งแต่ฝั่งไคลเอนต์
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">📦 ผลลัพธ์ส่งต่อ:</strong>
+          ส่งค่า URL และ Token ที่ผ่านการรับรองเข้าสู่ <code>executeAnalysis</code>
+        </div>
+      </div>`
+  },
+  {
+    n: 2,
+    actor: "คน 4 → คน 6",
+    color: "#58a6ff",
+    title: "2. ควบคุมสถานะหน้าเว็บและส่งคำขอ HTTP POST (executeAnalysis)",
+    fileRef: "FlowExplorer.tsx:103-145",
+    detail: `
+      <div class="sim-detail-content">
+        <div class="sim-detail-block">
+          <strong class="block-label">🎯 หน้าที่ / วัตถุประสงค์:</strong>
+          บริหาร State วงจรชีวิตของ UI (สถานะ Loading, เคลียร์ Error เดิม) และยิง fetch แบบ POST ข้ามไปหา Backend API Route
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
+          <ul>
+            <li><strong>บรรทัดที่ 104–108:</strong> ตรวจสอบความถูกต้องของ URL ผ่าน <code>validateUrlInput</code> ซ้ำเพื่อความมั่นใจ</li>
+            <li><strong>บรรทัดที่ 110–111:</strong> เคลียร์ Error เดิมด้วย <code>setError(null)</code> และเปิดสถานะโหลด <code>setLoading(true)</code></li>
+            <li><strong>บรรทัดที่ 114–118:</strong> ยิง <code>fetch('/api/analyze')</code> ด้วยเมธอด POST พร้อม body JSON <code>{ url, token: token?.trim() }</code></li>
+            <li><strong>บรรทัดที่ 120–129:</strong> ตรวจจับ HTTP Status จาก response หากเจอ 401 แจ้งเตือน Token ไม่ถูกต้อง หรือถ้า 403 แจ้งเรื่องโควตา Rate Limit</li>
+            <li><strong>บรรทัดที่ 131–133:</strong> รับ JSON แปลงเป็น <code>AnalysisResult</code> แล้วสั่ง <code>setResult(data)</code> ให้ผังกราฟแสดงผล</li>
+            <li><strong>บรรทัดที่ 141–143:</strong> ปิดสถานะโหลด <code>setLoading(false)</code> ในบล็อก <code>finally</code> เสมอ</li>
+          </ul>
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; Error Guard:</strong>
+          ตัดช่องว่าง Token ด้วย <code>.trim()</code> และมีบล็อก <code>finally</code> รับประกันว่าหน้าเว็บจะไม่ค้างสถานะ Loading
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">📦 ผลลัพธ์ส่งต่อ:</strong>
+          ส่ง HTTP Request ข้ามเครือข่ายเข้าสู่ Next.js API Route ฝั่งเซิร์ฟเวอร์
+        </div>
+      </div>`
+  },
+  {
+    n: 3,
+    actor: "คน 6 (route.ts)",
+    color: "#ff7b72",
+    title: "3. ประตูหลังบ้าน API Route รับคำขอและตรวจความถูกต้อง (POST handler)",
+    fileRef: "route.ts:7-31",
+    detail: `
+      <div class="sim-detail-content">
+        <div class="sim-detail-block">
+          <strong class="block-label">🎯 หน้าที่ / วัตถุประสงค์:</strong>
+          เป็น Endpoint รับคำขอ HTTP POST ตรวจสอบ Payload เบื้องต้น และส่งต่อให้ Master Orchestrator จัดการ
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
+          <ul>
+            <li><strong>บรรทัดที่ 7:</strong> ประกาศ <code>export async function POST(req: NextRequest)</code> รองรับคำขอ</li>
+            <li><strong>บรรทัดที่ 9–10:</strong> <code>await req.json()</code> แกะอ่าน body เพื่อดึงค่า url และ token</li>
+            <li><strong>บรรทัดที่ 12–17:</strong> Guard Clause — ตรวจสอบ <code>!url || typeof url !== 'string'</code> หากผิดปกติส่ง <code>NextResponse.json(..., { status: 400 })</code> ทันที</li>
+            <li><strong>บรรทัดที่ 19:</strong> เรียก <code>const result = await runAnalysisPipeline(url, token)</code> มอบหมายงานให้ Orchestrator</li>
+            <li><strong>บรรทัดที่ 20:</strong> ส่งผลลัพธ์กลับไปยังเบราว์เซอร์ด้วย <code>NextResponse.json(result, { status: 200 })</code></li>
+            <li><strong>บรรทัดที่ 24–27:</strong> ดักจับ Error 401 หรือ Bad credentials แล้วส่ง HTTP 401 Unauthorized กลับไปทันที</li>
+            <li><strong>บรรทัดที่ 28–30:</strong> ดักจับ Error อื่น ๆ แล้วตอบกลับด้วย HTTP 500 พร้อมข้อความควบคุมไว้</li>
+          </ul>
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; Error Guard:</strong>
+          ไม่ส่ง Stack trace ดิบกลับไปหาผู้ใช้ ป้องกันช่องโหว่ Information Disclosure
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">📦 ผลลัพธ์ส่งต่อ:</strong>
+          ส่ง url และ token เข้าสู่ <code>runAnalysisPipeline</code> ใน <code>pipeline.ts</code>
+        </div>
+      </div>`
+  },
+  {
+    n: 4,
+    actor: "คน 6 (pipeline.ts)",
+    color: "#ff7b72",
+    title: "4. Master Orchestrator เริ่มต้นและจับเวลาประมวลผล (runAnalysisPipeline)",
+    fileRef: "pipeline.ts:439-446",
+    detail: `
+      <div class="sim-detail-content">
+        <div class="sim-detail-block">
+          <strong class="block-label">🎯 หน้าที่ / วัตถุประสงค์:</strong>
+          เข้าสู่หัวใจหลักของการประมวลผล (Master Orchestrator) ที่คอยประสานงานโมดูลของเพื่อนทุกคน และเริ่มจับเวลาความเร็วระบบ
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
+          <ul>
+            <li><strong>บรรทัดที่ 439–440:</strong> ประกาศฟังก์ชัน <code>runAnalysisPipeline(githubUrl, userToken, mockTreeData, mockFilesContent)</code></li>
+            <li><strong>บรรทัดที่ 442:</strong> เริ่มจับเวลาด้วย <code>const startTime = performance.now()</code> เพื่อความแม่นยำระดับเสี้ยววินาที</li>
+            <li><strong>บรรทัดที่ 444–446:</strong> เตรียม <code>effectiveToken</code> โดยดึง <code>userToken?.trim()</code> หากไม่มีจะดึง <code>process.env.GITHUB_TOKEN</code> เป็นตัวสำรอง</li>
+          </ul>
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; Error Guard:</strong>
+          ใช้ <code>performance.now()</code> วัดเฉพาะเวลาการประมวลผลจริงใน Pipeline ไม่รวม overhead ของ HTTP network
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">📦 ผลลัพธ์ส่งต่อ:</strong>
+          ส่ง URL ไปยังขั้นตอนแกะโดเมนและข้อมูลคลัง
+        </div>
+      </div>`
+  },
+  {
+    n: 5,
+    actor: "คน 1 (github.ts) + คน 6",
+    color: "#3fb950",
+    title: "5. แกะโครงสร้าง URL & ตรวจสอบ Domain Whitelist (parseGitHubUrl)",
+    fileRef: "github.ts:15-41 · pipeline.ts:448-466",
+    detail: `
+      <div class="sim-detail-content">
+        <div class="sim-detail-block">
+          <strong class="block-label">🎯 หน้าที่ / วัตถุประสงค์:</strong>
+          สกัด owner, repo และ branch ออกจาก URL พร้อมคัดกรองความปลอดภัยของโดเมน ป้องกันคำขอแปลกปลอม
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
+          <ul>
+            <li><strong>github.ts บรรทัดที่ 16–18:</strong> ตรวจสอบค่าว่างของ URL</li>
+            <li><strong>github.ts บรรทัดที่ 20–22:</strong> เติมโปรโตคอล <code>https://</code> อัตโนมัติหากผู้ใช้พิมพ์ URL ย่อ</li>
+            <li><strong>github.ts บรรทัดที่ 25–28:</strong> ตรวจสอบ hostname ต้องเป็น <code>github.com</code> หรือ <code>www.github.com</code> แบบตรงตัว</li>
+            <li><strong>github.ts บรรทัดที่ 30–34:</strong> แยก segment และดึงชื่อ branch ผ่าน <code>parseBranchFromSegments</code> (เช่น <code>/tree/feat</code> หรือ <code>/blob/main</code>)</li>
+            <li><strong>github.ts บรรทัดที่ 36–39:</strong> ตัดนามสกุล <code>.git</code> ออกจากชื่อคลัง</li>
+            <li><strong>pipeline.ts บรรทัดที่ 448–458:</strong> Fallback Guard สำรองใน pipeline ช่วยตัดสตริงเองกรณีโมดูลเกิดข้อยกเว้น</li>
+            <li><strong>pipeline.ts บรรทัดที่ 460–462:</strong> Guard Clause ตรวจสอบซ้ำ หากไม่ใช่ github.com โยน Error ทันที</li>
+          </ul>
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; Error Guard:</strong>
+          ป้องกันช่องโหว่ SSRF (Server-Side Request Forgery) โดยบังคับให้ปลายทางเชื่อมต่อไปยัง GitHub เท่านั้น
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">📦 ผลลัพธ์ส่งต่อ:</strong>
+          ได้ข้อมูล <code>{ owner, repo, branch, activeBranch }</code> พร้อมส่งต่อ
+        </div>
+      </div>`
+  },
+  {
+    n: 6,
+    actor: "คน 6 (pipeline.ts)",
+    color: "#ff7b72",
+    title: "6. ตรวจสอบ In-Memory LRU Cache แยกสิทธิ์ (Token-Partitioned Cache)",
+    fileRef: "pipeline.ts:10-14, 467-475",
+    detail: `
+      <div class="sim-detail-content">
+        <div class="sim-detail-block">
+          <strong class="block-label">🎯 หน้าที่ / วัตถุประสงค์:</strong>
+          ตรวจสอบผลการวิเคราะห์ในแคชด้วย Key ที่แยกตามสิทธิ์ Token ป้องกันการดึงซ้ำ และป้องกัน Cache Poisoning หรือการข้ามสิทธิ์ดูข้อมูล
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
+          <ul>
+            <li><strong>pipeline.ts บรรทัดที่ 10–14:</strong> <code>computeCacheKey(githubUrl, effectiveToken)</code> ถ้าไม่มี Token ใช้ <code>#public</code> ถ้ามีจะแฮชด้วย SHA-256 (16 ตัวอักษร)</li>
+            <li><strong>pipeline.ts บรรทัดที่ 467:</strong> สร้าง <code>const cacheKey = computeCacheKey(githubUrl, effectiveToken)</code></li>
+            <li><strong>pipeline.ts บรรทัดที่ 469:</strong> เรียก <code>pipelineCache.has(cacheKey)</code> ตรวจสอบว่ามีข้อมูลในแคชหรือไม่</li>
+            <li><strong>ภายใน BoundedLRUCache (บรรทัด 27–57):</strong>
+              - ตรวจอายุข้อมูล TTL = 1 ชั่วโมง (3,600,000 ms) หากหมดอายุจะลบทิ้งอัตโนมัติ<br>
+              - หากข้อมูลยังใหม่ จะทำ LRU Shift ย้าย Key ไปท้ายสุดของ Map</li>
+            <li><strong>pipeline.ts บรรทัดที่ 470–474:</strong> หาก Cache Hit จะคืนข้อมูลเดิมทันทีพร้อมตั้ง <code>isCached: true</code> และคำนวณ <code>executionTimeMs</code> ล่าสุด (&lt;10ms)</li>
+          </ul>
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; Error Guard:</strong>
+          การทำ Cache Partitioning ป้องกันไม่ให้ผู้ใช้ทั่วไปแอบเห็นข้อมูลของคลังที่ใช้ Token ส่วนตัว และจำกัดขนาดแคชสูงสุด 50 คลังเพื่อคุมหน่วยความจำ
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">📦 ผลลัพธ์ส่งต่อ:</strong>
+          หาก Cache Miss จะทำงานต่อไปยังสเต็ปที่ 7
+        </div>
+      </div>`
+  },
+  {
+    n: 7,
+    actor: "คน 1 + คน 6",
+    color: "#3fb950",
+    title: "7. ดึงผังไฟล์จาก GitHub Tree API ตรวจสอบ Token 401 & Fallback 2 ชั้น",
+    fileRef: "pipeline.ts:299-373, 481 · github.ts:44-60",
+    detail: `
+      <div class="sim-detail-content">
+        <div class="sim-detail-block">
+          <strong class="block-label">🎯 หน้าที่ / วัตถุประสงค์:</strong>
+          ยิงคำขอไปยัง GitHub Git Trees API เพื่อดึงโครงสร้างไฟล์ทั้งหมดในครั้งเดียว พร้อมตรวจจับ Token ผิดพลาด และมีระบบ Fallback สำรอง branch
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
+          <ul>
+            <li><strong>github.ts บรรทัดที่ 44–49:</strong> <code>buildGitHubApiUrl</code> ประกอบ endpoint <code>/repos/{owner}/{repo}/git/trees/{branch}?recursive=1</code></li>
+            <li><strong>github.ts บรรทัดที่ 51–60:</strong> <code>buildGitHubHeaders</code> แนบ User-Agent และ <code>Authorization: Bearer</code> เมื่อมี Token</li>
+            <li><strong>pipeline.ts บรรทัดที่ 348–350:</strong> ตรวจจับ <code>response.status === 401</code> โยน Error ชัดเจน '❌ GitHub Token ไม่ถูกต้อง (401 Bad credentials)'</li>
+            <li><strong>pipeline.ts บรรทัดที่ 351–356:</strong> ตรวจจับ 403 Rate Limit และ 404 Not Found</li>
+            <li><strong>pipeline.ts บรรทัดที่ 323–333:</strong> Fallback ชั้นที่ 1 — ถ้า branch main ติด 404 จะสลับไปลอง master อัตโนมัติ</li>
+            <li><strong>pipeline.ts บรรทัดที่ 335–360:</strong> Fallback ชั้นที่ 2 — ถ้ายัง 404 จะยิงถาม Repo API เพื่อดึง <code>default_branch</code> ตัวจริง</li>
+            <li><strong>pipeline.ts บรรทัดที่ 481:</strong> รับ <code>{ treeData, activeBranch }</code> เตรียมส่งต่อไปคัดกรอง</li>
+          </ul>
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; Error Guard:</strong>
+          พารามิเตอร์ <code>?recursive=1</code> ทำให้ดึงผังทั้งคลังได้ในคำขอเดียว ลดการใช้โควตา API จาก O(N) เหลือ O(1)
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">📦 ผลลัพธ์ส่งต่อ:</strong>
+          ได้โครงสร้างต้นไม้ไฟล์ดิบ <code>GitHubTreeItem[]</code>
+        </div>
+      </div>`
+  },
+  {
+    n: 8,
+    actor: "คน 2 (parser.ts)",
+    color: "#bc8cff",
+    title: "8. คัดกรองไฟล์ขยะและจำแนกบทบาทสถาปัตยกรรม Next.js (filter & detect)",
+    fileRef: "parser.ts:101-160 · pipeline.ts:489-512",
+    detail: `
+      <div class="sim-detail-content">
+        <div class="sim-detail-block">
+          <strong class="block-label">🎯 หน้าที่ / วัตถุประสงค์:</strong>
+          คัดกรองไฟล์ที่ไม่เกี่ยวข้องออกเพื่อความรวดเร็วและความปลอดภัย และจำแนกประเภทบทบาทตามสถาปัตยกรรม Next.js App Router
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
+          <ul>
+            <li><strong>parser.ts บรรทัดที่ 101–124:</strong> <code>filterTreeFiles(treeData, 500)</code> กรองเฉพาะไฟล์จริง (<code>type === 'blob'</code>)</li>
+            <li><strong>parser.ts บรรทัดที่ 104–118:</strong> ผ่านฟังก์ชัน <code>shouldIgnorePath</code>:
+              - ตัดโฟลเดอร์ที่ไม่เกี่ยวข้อง: node_modules, .next, dist, tests, docs, .git ฯลฯ<br>
+              - ตัดไฟล์ Config และ Lockfile: package-lock.json, tsconfig.json, tailwind.config.*<br>
+              - อนุญาตเฉพาะไฟล์รากที่จำเป็น: middleware.ts, proxy.ts<br>
+              - ตรวจนามสกุล: รับเฉพาะ .ts, .tsx, .js, .jsx</li>
+            <li><strong>parser.ts บรรทัดที่ 121:</strong> ตัดจำกัดไฟล์ที่ maxLimit (500 ไฟล์แรก) ป้องกัน DoS</li>
+            <li><strong>parser.ts บรรทัดที่ 129–160:</strong> <code>detectNextFileType(path)</code> วนลูปจำแนกบทบาท 9 ประเภท: page, layout, action, middleware, store, hook, component, api, other</li>
+          </ul>
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; Error Guard:</strong>
+          ป้องกันหน่วยความจำบวมจากการประมวลผลคลังขนาดยักษ์ และไม่เสียเวลาดาวน์โหลดไฟล์ที่ไม่ใช่โค้ด
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">📦 ผลลัพธ์ส่งต่อ:</strong>
+          ได้รายการไฟล์ที่ผ่านการคัดเลือกพร้อมระบุประเภทสถาปัตยกรรมครบถ้วน
+        </div>
+      </div>`
+  },
+  {
+    n: 9,
+    actor: "คน 2 + คน 6",
+    color: "#bc8cff",
+    title: "9. ดึงโค้ดดิบ 45 ไฟล์ขนานกัน, สกัด Import/Action & เชื่อมโยงความสัมพันธ์",
+    fileRef: "pipeline.ts:521-557 · parser.ts:165-271",
+    detail: `
+      <div class="sim-detail-content">
+        <div class="sim-detail-block">
+          <strong class="block-label">🎯 หน้าที่ / วัตถุประสงค์:</strong>
+          ดาวน์โหลดเนื้อหาโค้ดจริงของไฟล์สำคัญ 45 ไฟล์แรกพร้อมกัน สกัดคำสั่ง Import และ Event Handlers แล้วแปลงเป็น Path ไฟล์จริง
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
+          <ul>
+            <li><strong>pipeline.ts บรรทัดที่ 521–542:</strong> ดึงโค้ดดิบสูงสุด 45 ไฟล์แรกผ่าน Raw CDN แบบขนานด้วย <code>Promise.all</code></li>
+            <li><strong>pipeline.ts บรรทัดที่ 530:</strong> ตั้งเวลาตัดขาด <code>AbortSignal.timeout(4000)</code> ป้องกันการค้างจากเน็ตเวิร์ก</li>
+            <li><strong>parser.ts บรรทัดที่ 165–204:</strong> <code>extractImportsFromCode</code> สกัดคำสั่ง import (ลบ comment ก่อน regex กันตรวจจับผิดพลาด)</li>
+            <li><strong>pipeline.ts บรรทัดที่ 66–127:</strong> แปลง import เป็น path จริงด้วยกลยุทธ์ 3 ชั้น:
+              - <code>resolveAliasImport</code> (บรรทัด 66-74): แปลง @/lib/x หรือ ~/lib/x<br>
+              - <code>resolveRelativeImport</code> (บรรทัด 81-99): แปลง ./ และ ../ เทียบกับโฟลเดอร์ต้นทาง<br>
+              - <code>resolveImportToFilePath</code> (บรรทัด 103-127): ตรวจสอบนามสกุลและ index file</li>
+            <li><strong>parser.ts บรรทัดที่ 213–271:</strong> <code>extractActionTriggers</code> สกัด onClick และ form action เชื่อม UI เข้าหา Server Action</li>
+            <li><strong>pipeline.ts บรรทัดที่ 133–225:</strong> <code>inferStructuralRelations</code> เสริมเส้นความสัมพันธ์เชิงโครงสร้าง App Router อัตโนมัติ (middleware -> root, layout -> page, parent -> sub-route)</li>
+          </ul>
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; Error Guard:</strong>
+          ป้องกันเซิร์ฟเวอร์ค้างด้วย Timeout 4 วินาที และมี Structural Inferencing เป็น Fallback รองรับกรณีอ่านโค้ดดิบไม่ได้
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">📦 ผลลัพธ์ส่งต่อ:</strong>
+          ได้ชุดความสัมพันธ์สมบูรณ์ <code>CodeRelation[]</code> (source, target, type, label)
+        </div>
+      </div>`
+  },
+  {
+    n: 10,
+    actor: "คน 3 (generator.ts)",
+    color: "#d29922",
+    title: "10. จัดวางผังกราฟด้วย Dagre Hierarchical Layout (buildFlowElements)",
+    fileRef: "generator.ts:89-130 · pipeline.ts:558-570",
+    detail: `
+      <div class="sim-detail-content">
+        <div class="sim-detail-block">
+          <strong class="block-label">🎯 หน้าที่ / วัตถุประสงค์:</strong>
+          คำนวณพิกัด (X, Y) ของแต่ละโหนดด้วย Dagre Graphlib จัดวางแบบลำดับชั้นไม่ให้เส้นและกล่องทับกัน
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
+          <ul>
+            <li><strong>generator.ts บรรทัดที่ 7–13:</strong> <code>sanitizeNodeId(path)</code> ทำความสะอาด ID ให้ปลอดภัย ตัดวงเล็บ Route Group เช่น (auth)</li>
+            <li><strong>generator.ts บรรทัดที่ 30–46:</strong> <code>getNodeColorConfig(fileType)</code> กำหนดชุดสีตามบทบาทสถาปัตยกรรม</li>
+            <li><strong>generator.ts บรรทัดที่ 40–83:</strong> <code>applyDagreLayout(nodes, edges)</code> ตั้งค่า Dagre:
+              - <code>graph.setGraph({ rankdir: 'LR', nodesep: 55, ranksep: 170, marginx: 60, marginy: 60 })</code><br>
+              - กำหนดขนาดโหนด: กว้าง 240px สูง 72px<br>
+              - รัน <code>dagre.layout(g)</code> คำนวณพิกัด X, Y จากซ้ายไปขวา</li>
+            <li><strong>generator.ts บรรทัดที่ 102–125:</strong> สร้าง <code>FlowNodeItem[]</code> และ <code>FlowEdgeItem[]</code> (เปิด <code>animated: true</code> สำหรับ Server Action)</li>
+            <li><strong>generator.ts บรรทัดที่ 169–191:</strong> <code>generateMermaidSyntax</code> สร้าง Mermaid string สำรองไว้สำหรับส่งออกผัง</li>
+          </ul>
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; Error Guard:</strong>
+          มี try-catch ครอบ Dagre หากคำนวณล้มเหลวจะ fallback ใช้พิกัดกริดพื้นฐานแทน กราฟไม่พัง
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">📦 ผลลัพธ์ส่งต่อ:</strong>
+          ได้ nodes, edges และ mermaidSyntax พร้อมสำหรับเรนเดอร์
+        </div>
+      </div>`
+  },
+  {
+    n: 11,
+    actor: "คน 6 → คน 4",
+    color: "#ff7b72",
+    title: "11. บันทึกแคช LRU, ตอบ HTTP 200 & วาดผัง React Flow บนหน้าจอ",
+    fileRef: "pipeline.ts:576-591 · route.ts:20 · FlowCanvas.tsx:122-290",
+    detail: `
+      <div class="sim-detail-content">
+        <div class="sim-detail-block">
+          <strong class="block-label">🎯 หน้าที่ / วัตถุประสงค์:</strong>
+          บันทึกผลลัพธ์ลงแคชแยกสิทธิ์ ส่งข้อมูล JSON กลับไปยังหน้า Dashboard และเรนเดอร์ลงบน Canvas
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
+          <ul>
+            <li><strong>pipeline.ts บรรทัดที่ 576–588:</strong> รวมผลลัพธ์เข้าเป็น <code>AnalysisResult</code> พร้อมคำนวณ <code>executionTimeMs</code></li>
+            <li><strong>pipeline.ts บรรทัดที่ 590:</strong> <code>pipelineCache.set(cacheKey, finalResult)</code> บันทึกลงแคช LRU</li>
+            <li><strong>route.ts บรรทัดที่ 20:</strong> ส่งผลลัพธ์กลับไปยังเบราว์เซอร์ด้วย <code>NextResponse.json(result, { status: 200 })</code></li>
+            <li><strong>FlowExplorer.tsx บรรทัดที่ 133:</strong> <code>setResult(data)</code> อัปเดตข้อมูลลง State หลักของหน้าเว็บ</li>
+            <li><strong>FlowCanvas.tsx บรรทัดที่ 122–218:</strong> <code>toRfNodes</code> แปลงโหนดเป็น React Flow Nodes</li>
+            <li><strong>FlowCanvas.tsx บรรทัดที่ 224–287:</strong> <code>toRfEdges</code> แปลงเส้นเป็น React Flow Edges พร้อมลูกศร MarkerEnd</li>
+            <li><strong>FlowCanvas.tsx บรรทัดที่ 290–528:</strong> คอมโพเนนต์ React Flow วาด Canvas พร้อม MiniMap, Controls และ Background Grid</li>
+          </ul>
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; Error Guard:</strong>
+          ข้อมูลถูกแคชอย่างปลอดภัยแยกตาม Token และเปิด <code>onlyRenderVisibleElements</code> ป้องกันเบราว์เซอร์กระตุก
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">📦 ผลลัพธ์ส่งต่อ:</strong>
+          สิ้นสุดช่วง Auto Flow — ผัง Flowchart แสดงผลสมบูรณ์และพร้อมรับการโต้ตอบของผู้ใช้
+        </div>
+      </div>`
+  },
+  {
+    n: 12,
+    actor: "คน 3 (FlowCanvas)",
+    color: "#d29922",
+    title: "12. [On-Demand ก] คลิกโหนดเพื่อสืบย้อนความสัมพันธ์ด้วย BFS ทั้งสาย (Trace Flow)",
+    fileRef: "FlowCanvas.tsx:48-119, 348-350",
+    detail: `
+      <div class="sim-detail-content">
+        <div class="sim-detail-block">
+          <strong class="block-label">🎯 หน้าที่ / วัตถุประสงค์:</strong>
+          ใช้อัลกอริทึม Breadth-First Search (BFS) เพื่อค้นหาโหนดต้นทาง (Ancestors) และปลายทาง (Descendants) ทั้งหมดที่เชื่อมโยงกับโหนดที่คลิก
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
+          <ul>
+            <li><strong>FlowCanvas.tsx บรรทัดที่ 48–54:</strong> <code>computeTracePath</code> รับ selectedNodeId, edges, traceMode ('all' หรือ '1-step')</li>
+            <li><strong>FlowCanvas.tsx บรรทัดที่ 55–66:</strong> โหมด 1-Step: วนลูปหาเฉพาะโหนดที่เชื่อมติดกันโดยตรง</li>
+            <li><strong>FlowCanvas.tsx บรรทัดที่ 68–118:</strong> โหมดทั้งสาย (All Steps):
+              - สร้าง adjacency list: outgoingMap (ทิศทางไปข้างหน้า) และ incomingMap (ทิศทางย้อนกลับ)<br>
+              - BFS ขาลง (Descendants): ใช้ Queue และ visited Set วิ่งสืบหาลูกหลานทั้งหมดจนสุดสาย<br>
+              - BFS ขาขึ้น (Ancestors): ใช้ Queue และ visited Set วิ่งสืบหาบรรพบุรุษต้นทางจนสุดสาย</li>
+            <li><strong>FlowCanvas.tsx บรรทัดที่ 119:</strong> ส่งคืน <code>{ highlightedNodeIds, highlightedEdgeIds }</code></li>
+            <li>โหนดที่ไม่อยู่ในสายจะถูกปรับความโปร่งแสงลดลงเหลือ <code>opacity: 0.35</code></li>
+            <li><strong>FlowCanvas.tsx บรรทัดที่ 348–350:</strong> <code>handleClearFocus</code> ล้างสถานะเมื่อกด Esc หรือคลิกพื้นที่ว่าง</li>
+          </ul>
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; Error Guard:</strong>
+          ป้องกัน Circular Dependency Loop ด้วยการใช้ Set ตรวจสอบ visited ก่อน push เข้า Queue เสมอ
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">📦 ผลลัพธ์ส่งต่อ:</strong>
+          ผู้ใช้เห็นเส้นทางข้อมูลและผลกระทบของไฟล์นั้นอย่างชัดเจนทั้งระบบ
+        </div>
+      </div>`
+  },
+  {
+    n: 13,
+    actor: "คน 4 + คน 5 (SideDrawer & CodeViewer)",
+    color: "#f472b6",
+    title: "13. [On-Demand ข] กด Inspect ซอร์สโค้ด ไฮไลต์ Prism และเปิด Side Drawer",
+    fileRef: "FlowExplorer.tsx:43-96 · code-viewer.ts:28-110 · SideDrawer.tsx:26-181",
+    detail: `
+      <div class="sim-detail-content">
+        <div class="sim-detail-block">
+          <strong class="block-label">🎯 หน้าที่ / วัตถุประสงค์:</strong>
+          ดาวน์โหลดโค้ดจริงของไฟล์ที่เลือก ตัดทอนอย่างปลอดภัย ไฮไลต์ไวยากรณ์ด้วย Prism และแสดงผลใน Side Drawer ด้านขวา
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
+          <ul>
+            <li><strong>FlowCanvas.tsx บรรทัดที่ 312–318:</strong> <code>handleInspect</code> ส่ง Event พร้อมชื่อและประเภทไฟล์กลับไปหา FlowExplorer</li>
+            <li><strong>FlowExplorer.tsx บรรทัดที่ 60–61:</strong> เรียก <code>buildGitHubRawUrl</code> และ <code>buildGitHubBlobUrl</code> จาก <code>github.ts</code></li>
+            <li><strong>FlowExplorer.tsx บรรทัดที่ 73–87:</strong> ยิง <code>fetch(rawUrl)</code> ดาวน์โหลดโค้ดจริงและเปิด drawerState</li>
+            <li><strong>code-viewer.ts บรรทัดที่ 28–46:</strong> <code>getLanguageFromPath</code> ตรวจนามสกุลเพื่อแมปกับภาษาของ Prism</li>
+            <li><strong>code-viewer.ts บรรทัดที่ 53–73:</strong> <code>formatCodeSnippet</code> ตัดทอนโค้ดเหลือ 300 บรรทัดแรก เพื่อป้องกัน DOM โตเกินไป</li>
+            <li><strong>code-viewer.ts บรรทัดที่ 81–85:</strong> <code>escapeHtml</code> แปลงอักขระพิเศษเพื่อป้องกันช่องโหว่ XSS</li>
+            <li><strong>code-viewer.ts บรรทัดที่ 91–110:</strong> <code>highlightCodeWithPrism</code> แปลงโค้ดเป็น HTML ที่มีสีสันสวยงาม</li>
+            <li><strong>SideDrawer.tsx บรรทัดที่ 39–48:</strong> ดักจับปุ่ม Escape เพื่อปิดหน้าต่าง, ปุ่ม Copy Code คัดลอกโค้ดเต็ม, และปุ่ม 'ดูโค้ดทั้งหมด'</li>
+          </ul>
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; Error Guard:</strong>
+          ป้องกัน XSS Injection ด้วย escapeHtml และการตัดโค้ดที่ 300 บรรทัดป้องกันเบราว์เซอร์กระตุก
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">📦 ผลลัพธ์ส่งต่อ:</strong>
+          ผู้ใช้สามารถอ่านโค้ดจริงประกอบแผนผังได้ทันทีโดยไม่ต้องสลับหน้าจอไปที่ GitHub
+        </div>
+      </div>`
+  },
+  {
+    n: 14,
+    actor: "คน 4 + คน 3",
+    color: "#58a6ff",
+    title: "14. [On-Demand ค] ค้นหาโหนด (Ctrl+K) เลื่อนมุมกล้อง & แชร์สถานะด้วย Base64 URL",
+    fileRef: "FlowCanvas.tsx:353-376 · ui-helper.ts:63-119 · FlowExplorer.tsx:153-166",
+    detail: `
+      <div class="sim-detail-content">
+        <div class="sim-detail-block">
+          <strong class="block-label">🎯 หน้าที่ / วัตถุประสงค์:</strong>
+          ค้นหาโหนดด้วยคีย์ลัด เลื่อนซูมมุมกล้องอัตโนมัติ และแชร์ URL แผนผังพร้อมสถานะที่เลือกให้เพื่อนร่วมทีมได้ทันที
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
+          <ul>
+            <li><strong>FlowCanvas.tsx บรรทัดที่ 353–376:</strong> <code>focusAndPanToNode</code> เมื่อเลือกโหนดจากกล่องค้นหา (Ctrl+K หรือ /) จะสั่ง <code>setCenter(x, y, { zoom: 1.2, duration: 800 })</code> เพื่อแพนกล้องอย่างนุ่มนวล</li>
+            <li><strong>ui-helper.ts บรรทัดที่ 63–82:</strong> <code>encodeShareableState</code> แปลง URL และ ID ของโหนดที่โฟกัสเป็น JSON แล้วเข้ารหัสเป็น Base64 แปะท้ายลิงก์ <code>?state=&lt;base64&gt;</code> แล้วคัดลอกลง Clipboard</li>
+            <li><strong>ui-helper.ts บรรทัดที่ 87–119:</strong> <code>decodeShareableState</code> เมื่อเปิดลิงก์ที่มีพารามิเตอร์ state ระบบจะถอดรหัส Base64 อย่างปลอดภัยด้วย try-catch หากข้อมูลผิดรูปจะคืน null ไม่ให้ระบบพัง</li>
+            <li><strong>FlowExplorer.tsx บรรทัดที่ 153–166:</strong> อ่านพารามิเตอร์ state ตอนเปิดหน้าเว็บ และสั่งรันการวิเคราะห์อัตโนมัติผ่าน queueMicrotask</li>
+          </ul>
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; Error Guard:</strong>
+          ป้องกัน State Injection และ Malformed State Crashing ด้วยการ Wrap ใน Safe Try-Catch เสมอ
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">📦 ผลลัพธ์ส่งต่อ:</strong>
+          ผู้ใช้คนอื่นสามารถเปิดลิงก์และเห็นมุมมองผังกราฟเดียวกันได้ทันที 100%
+        </div>
+      </div>`
+  }
 ];
 
 const SIM_JUMPS = [
   {
     file: "flowexplorer", line: 168,
     snippets: [
-      { file: "flowexplorer", line: 168, start: 168, end: 171, note: "ฟอร์มบนหน้า Dashboard — onSubmit ผูกกับ handleSubmit ของคนที่ 4" }
+      { file: "flowexplorer", line: 168, start: 168, end: 171, note: "handleSubmit — ดักการกด Submit และสั่ง e.preventDefault() ป้องกันรีเฟรช" },
+      { file: "uihelper", line: 16, start: 16, end: 56, note: "validateUrlInput — ตรวจสอบค่าว่าง สกัด hostname และตรวจ Whitelist โดเมน" }
     ]
   },
   {
-    file: "flowexplorer", line: 115,
+    file: "flowexplorer", line: 114,
     snippets: [
-      { file: "flowexplorer", line: 115, start: 114, end: 135, note: "executeAnalysis — fetch() POST /api/analyze พร้อมดัก Error 401 Bad credentials ชัดเจน" }
+      { file: "flowexplorer", line: 114, start: 103, end: 145, note: "executeAnalysis — บริหาร State โหลด/ผิดพลาด และยิง fetch POST /api/analyze" }
     ]
   },
   {
-    file: "route", line: 9,
+    file: "route", line: 7,
     snippets: [
-      { file: "route", line: 9, start: 7, end: 27, note: "POST handler — ตรวจ URL และดักส่ง HTTP 401 เมื่อ Token ไม่ถูกต้อง" }
+      { file: "route", line: 7, start: 7, end: 31, note: "POST handler — รับ JSON body, Guard Clause เช็ค URL และส่ง HTTP 401/500" }
     ]
   },
   {
     file: "route", line: 19,
     snippets: [
-      { file: "route", line: 19, start: 18, end: 20, note: "ส่งต่อเข้า runAnalysisPipeline — หัวใจงานของคนที่ 6" }
+      { file: "route", line: 19, start: 18, end: 20, note: "ส่งมอบงานให้ Orchestrator หลักผ่าน runAnalysisPipeline(url, token)" },
+      { file: "pipeline", line: 439, start: 439, end: 446, note: "runAnalysisPipeline ทางเข้าหลัก — เริ่มจับเวลาด้วย performance.now()" }
     ]
   },
   {
-    file: "github", line: 15,
+    file: "github", line: 25,
     snippets: [
-      { file: "github", line: 15, start: 15, end: 41, note: "parseGitHubUrl() — แกะโดเมน github.com ออกเป็น { owner, repo } + อ่านชื่อ branch" }
+      { file: "github", line: 25, start: 15, end: 41, note: "parseGitHubUrl — แยก owner/repo/branch และบังคับโดเมน github.com" },
+      { file: "pipeline", line: 448, start: 448, end: 466, note: "Fallback Guard สำรองของ pipeline และ Whitelist Check" }
     ]
   },
   {
     file: "pipeline", line: 467,
     snippets: [
-      { file: "pipeline", line: 10, start: 10, end: 14, note: "computeCacheKey — แฮช Token ด้วย SHA-256 ทำ Partition Cache ป้องกันรั่วไหล" },
-      { file: "pipeline", line: 467, start: 466, end: 475, note: "เช็ค In-Memory BoundedLRUCache ด้วย cacheKey แยกตามสิทธิ์" }
+      { file: "pipeline", line: 10, start: 10, end: 14, note: "computeCacheKey — คำนวณ SHA-256 Token Hash ทำ Cache Partitioning" },
+      { file: "pipeline", line: 467, start: 467, end: 475, note: "pipelineCache.has() ตรวจสอบแคชแยกสิทธิ์ คืนค่ารวดเร็ว <10ms" }
     ]
   },
   {
     file: "pipeline", line: 481,
     snippets: [
       { file: "pipeline", line: 348, start: 345, end: 358, note: "ตรวจจับ HTTP 401 Bad credentials ใน fetchGitHubTree" },
-      { file: "pipeline", line: 481, start: 477, end: 485, note: "เรียก fetchGitHubTree พร้อมระบบ Fallback 2 ชั้น" }
+      { file: "pipeline", line: 481, start: 477, end: 485, note: "fetchGitHubTree พร้อม Fallback 2 ชั้น main -> master -> default_branch" },
+      { file: "github", line: 56, start: 44, end: 60, note: "buildGitHubApiUrl & buildGitHubHeaders แนบ Bearer Token" }
     ]
   },
   {
-    file: "parser", line: 101,
+    file: "parser", line: 104,
     snippets: [
-      { file: "pipeline", line: 489, start: 487, end: 512, note: "เรียก filterTreeFiles และ detectNextFileType เพื่อคัดแยกไฟล์" },
-      { file: "parser", line: 101, start: 101, end: 124, note: "ตัวแกนจริงของคนที่ 2: ตัดโฟลเดอร์ขยะ + จำกัดจำนวนไฟล์" },
-      { file: "parser", line: 129, start: 129, end: 160, note: "detectNextFileType — จำแนกประเภทไฟล์ App Router" }
+      { file: "parser", line: 104, start: 101, end: 124, note: "filterTreeFiles — ตัดโฟลเดอร์ขยะ/ไฟล์คอนฟิก และจำกัด 500 ไฟล์" },
+      { file: "parser", line: 129, start: 129, end: 160, note: "detectNextFileType — จำแนก 9 บทบาทสถาปัตยกรรม App Router" },
+      { file: "pipeline", line: 489, start: 487, end: 512, note: "ลูปจำแนกบทบาทไฟล์ใน pipeline" }
     ]
   },
   {
-    file: "pipeline", line: 548,
+    file: "pipeline", line: 521,
     snippets: [
-      { file: "pipeline", line: 548, start: 545, end: 560, note: "ดึงคำสั่ง import จริงจากโค้ดดิบ แล้วผูกเป้าหมายเข้ากับไฟล์จริง" },
-      { file: "generator", line: 89, start: 89, end: 130, note: "buildFlowElements — สร้าง node/edge แล้วจัดวางด้วย Dagre" }
+      { file: "pipeline", line: 521, start: 521, end: 542, note: "Promise.all ดึงโค้ดดิบ 45 ไฟล์แรกแบบขนาน พร้อม timeout 4s" },
+      { file: "parser", line: 165, start: 165, end: 204, note: "extractImportsFromCode — สกัด import จากโค้ดดิบ" },
+      { file: "pipeline", line: 103, start: 103, end: 127, note: "resolveImportToFilePath — กลยุทธ์แปลง import เป็น path จริง 3 ชั้น" },
+      { file: "parser", line: 213, start: 213, end: 271, note: "extractActionTriggers — สกัด onClick และ form action" },
+      { file: "pipeline", line: 133, start: 133, end: 225, note: "inferStructuralRelations — เสริมเส้นโครงสร้าง Next.js อัตโนมัติ" }
+    ]
+  },
+  {
+    file: "generator", line: 48,
+    snippets: [
+      { file: "generator", line: 48, start: 40, end: 83, note: "applyDagreLayout — กำหนดค่า Dagre 'LR' และคำนวณพิกัด X, Y" },
+      { file: "generator", line: 102, start: 89, end: 130, note: "buildFlowElements — สร้าง nodes, edges และสีตามบทบาท" }
     ]
   },
   {
     file: "pipeline", line: 590,
     snippets: [
-      { file: "pipeline", line: 590, start: 576, end: 592, note: "บันทึกผลลัพธ์ลงแคช LRU ด้วย cacheKey แยกสิทธิ์" },
-      { file: "route", line: 20, start: 19, end: 28, note: "ตอบ NextResponse.json(result, 200) กลับหน้า Dashboard" }
+      { file: "pipeline", line: 590, start: 576, end: 592, note: "pipelineCache.set บันทึกลงแคช LRU ด้วย cacheKey แยกสิทธิ์" },
+      { file: "route", line: 20, start: 19, end: 28, note: "NextResponse.json ส่งผลลัพธ์กลับหน้า Dashboard 200 OK" },
+      { file: "flowcanvas", line: 129, start: 122, end: 218, note: "toRfNodes & toRfEdges — แปลงข้อมูลและวาดผังบน React Flow Canvas" }
+    ]
+  },
+  {
+    file: "flowcanvas", line: 57,
+    snippets: [
+      { file: "flowcanvas", line: 57, start: 48, end: 119, note: "computeTracePath — ค้นหาสายสัมพันธ์ Ancestors & Descendants ด้วย BFS" },
+      { file: "flowcanvas", line: 348, start: 348, end: 350, note: "handleClearFocus — ล้างการไฮไลต์กลับสู่มุมมองปกติ" }
+    ]
+  },
+  {
+    file: "flowexplorer", line: 60,
+    snippets: [
+      { file: "flowexplorer", line: 60, start: 43, end: 96, note: "handleSelectNode — ดึง rawUrl และสั่ง fetch ดาวน์โหลดโค้ดจริง" },
+      { file: "codeviewer", line: 62, start: 53, end: 110, note: "formatCodeSnippet ตัด 300 บรรทัด & highlightCodeWithPrism" },
+      { file: "sidedrawer", line: 25, start: 25, end: 90, note: "SideDrawer — แผงตรวจโค้ดด้านขวาพร้อมปุ่ม Copy Code" }
+    ]
+  },
+  {
+    file: "flowcanvas", line: 353,
+    snippets: [
+      { file: "flowcanvas", line: 353, start: 353, end: 376, note: "focusAndPanToNode — ค้นหาโหนดด่วน (Ctrl+K) และสั่ง setCenter แพนกล้อง" },
+      { file: "uihelper", line: 129, start: 63, end: 119, note: "encodeShareableState & decodeShareableState — จัดการ Base64 State URL" }
     ]
   }
 ];
