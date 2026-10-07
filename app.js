@@ -966,6 +966,10 @@ function switchMainView(section) {
   if (reader) reader.hidden = sec !== "blocks";   // ตัวอ่านบรรทัดผูกกับโหมดเจาะสเต็ปเท่านั้น
   const stepNav = document.getElementById("step-nav");
   if (stepNav) stepNav.classList.toggle("hidden", sec !== "blocks");
+  const ctxBtn = document.getElementById("ctx-btn");
+  if (ctxBtn) ctxBtn.classList.toggle("hidden", sec !== "blocks");
+  const mobileSwitcher = document.getElementById("mobile-pane-switcher");
+  if (mobileSwitcher) mobileSwitcher.classList.toggle("hidden", sec !== "blocks");
 
   if (sec === "blocks") {
     selectStep(currentStepIndex);
