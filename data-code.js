@@ -3,72 +3,17 @@
 // (โหลดก่อน data-content.js เพราะ FILE_META อ้างอิง RAW_*)
 // ============================================================
 
-const RAW_PIPELINE = `import crypto from 'crypto';
-import { parseGitHubUrl, buildGitHubApiUrl, buildGitHubHeaders } from './github';
+const RAW_PIPELINE = `import { parseGitHubUrl, buildGitHubApiUrl, buildGitHubHeaders } from './github';
 import { filterTreeFiles, detectNextFileType, extractImportsFromCode } from './parser';
 import { buildFlowElements } from './generator';
 import { AnalysisResult, GitHubTreeItem, CodeRelation, NextFileType, FlowNodeItem, FlowEdgeItem } from '../types';
 
-/**
- * Compute partitioned cache key with SHA-256 token hash to prevent secret exposure and auth bypass.
- */
-function computeCacheKey(githubUrl: string, token?: string): string {
-  if (!token) return \`\${githubUrl}#public\`;
-  const tokenHash = crypto.createHash('sha256').update(token.trim()).digest('hex').slice(0, 16);
-  return \`\${githubUrl}#\${tokenHash}\`;
-}
-
-const MAX_CACHE_ENTRIES = 50;
-const CACHE_TTL_MS = 15 * 60 * 1000; // 15-minute TTL to balance fresh updates and rate limit protection
 const MAX_FILTERED_FILES = 500;
 const MAX_RAW_FETCH_FILES = 45;
 const FETCH_TIMEOUT_MS = 4000;
 
-interface CacheItem {
-  result: AnalysisResult;
-  timestamp: number;
-}
-
-/**
- * In-memory LRU cache with TTL eviction policy to prevent memory leaks and redundant API calls.
- */
-class BoundedLRUCache {
-  private cache = new Map<string, CacheItem>();
-
-  get(key: string): AnalysisResult | undefined {
-    const item = this.cache.get(key);
-    if (!item) return undefined;
-
-    if (Date.now() - item.timestamp > CACHE_TTL_MS) {
-      this.cache.delete(key);
-      return undefined;
-    }
-
-    this.cache.delete(key);
-    this.cache.set(key, item);
-    return {
-      ...item.result,
-      isCached: true,
-      cachedAt: item.timestamp,
-    };
-  }
-
-  set(key: string, result: AnalysisResult): void {
-    if (this.cache.has(key)) {
-      this.cache.delete(key);
-    } else if (this.cache.size >= MAX_CACHE_ENTRIES) {
-      const oldestKey = this.cache.keys().next().value;
-      if (oldestKey) this.cache.delete(oldestKey);
-    }
-    this.cache.set(key, { result, timestamp: Date.now() });
-  }
-
-  has(key: string): boolean {
-    return this.get(key) !== undefined;
-  }
-}
-
-export const pipelineCache = new BoundedLRUCache();
+// Simple in-memory cache to prevent redundant GitHub requests
+export const pipelineCache = new Map<string, AnalysisResult>();
 
 const COMMON_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.jsx', '/index.ts', '/index.tsx', '/index.js'];
 
@@ -312,29 +257,6 @@ async function fetchGitHubTree(
       }
     }
 
-    if (response.status === 404) {
-      try {
-        const repoInfoRes = await fetch(
-          \`https://api.github.com/repos/\${owner}/\${repo}\`,
-          { headers: buildGitHubHeaders(token) }
-        );
-        if (repoInfoRes.ok) {
-          const repoData = await repoInfoRes.json();
-          const detectedDefaultBranch = repoData.default_branch;
-          if (detectedDefaultBranch && detectedDefaultBranch !== 'main' && detectedDefaultBranch !== 'master') {
-            const detectedBranchRes = await fetch(
-              buildGitHubApiUrl(owner, repo, detectedDefaultBranch),
-              { headers: buildGitHubHeaders(token) }
-            );
-            if (detectedBranchRes.ok) {
-              response = detectedBranchRes;
-              activeBranch = detectedDefaultBranch;
-            }
-          }
-        }
-      } catch {}
-    }
-
     if (!response.ok) {
       if (response.status === 401) {
         throw new Error('❌ GitHub Token ไม่ถูกต้อง (401 Bad credentials) กรุณาตรวจสอบ Token อีกครั้ง หรือเว้นว่างไว้เพื่อใช้งานแบบสาธารณะ');
@@ -427,11 +349,12 @@ export async function runAnalysisPipeline(
   const { owner, repo } = parsed;
   let activeBranch = parsed.branch || 'main';
   const effectiveToken = token?.trim() || process.env.GITHUB_TOKEN?.trim() || undefined;
-  const cacheKey = computeCacheKey(githubUrl, effectiveToken);
+  const cacheKey = githubUrl.trim().toLowerCase();
 
   if (pipelineCache.has(cacheKey)) {
+    const cached = pipelineCache.get(cacheKey)!;
     return {
-      ...pipelineCache.get(cacheKey)!,
+      ...cached,
       isCached: true,
       executionTimeMs: performance.now() - startTime,
     };
@@ -546,7 +469,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "เกิดข้อผิดพลาดในการประมวลผล";
-    const status = errorMessage.includes('401') ? 401 : 500;
+
+    let status = 500;
+    if (errorMessage.includes('401') || errorMessage.includes('Token ไม่ถูกต้อง')) {
+      status = 401;
+    } else if (errorMessage.includes('404') || errorMessage.includes('ไม่พบคลังโค้ด')) {
+      status = 404;
+    } else if (errorMessage.includes('403') || errorMessage.includes('Rate Limit')) {
+      status = 403;
+    } else if (errorMessage.includes('URL ต้องมาจาก') || errorMessage.includes('กรุณาระบุ')) {
+      status = 400;
+    }
+
     return NextResponse.json(
       { error: errorMessage },
       { status },
@@ -1074,24 +1008,29 @@ export function FlowExplorer() {
     }
   };
 
-  const executeAnalysisRef = useRef(executeAnalysis);
-  useEffect(() => {
-    executeAnalysisRef.current = executeAnalysis;
-  });
-
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const stateParam = new URLSearchParams(window.location.search).get('state');
-    if (!stateParam) return;
+    const searchParams = new URLSearchParams(window.location.search);
+    const stateParam = searchParams.get('state');
+    const directUrl = searchParams.get('url');
 
-    const decoded = decodeShareableState(stateParam);
-    if (decoded?.url) {
-      const targetUrl = decoded.url;
-      const targetNode = decoded.activeNode;
-      queueMicrotask(() => {
-        setUrl(targetUrl);
-        void executeAnalysisRef.current(targetUrl, token, targetNode);
-      });
+    let targetUrl: string | undefined = undefined;
+    let targetNode: string | undefined = undefined;
+
+    if (directUrl) {
+      targetUrl = directUrl;
+      targetNode = searchParams.get('node') || undefined;
+    } else if (stateParam) {
+      const decoded = decodeShareableState(stateParam);
+      if (decoded?.url) {
+        targetUrl = decoded.url;
+        targetNode = decoded.activeNode;
+      }
+    }
+
+    if (targetUrl) {
+      setUrl(targetUrl);
+      void executeAnalysis(targetUrl, token, targetNode);
     }
   }, []);
 
@@ -1102,11 +1041,11 @@ export function FlowExplorer() {
 
   const handleShare = () => {
     if (!url || typeof window === 'undefined') return;
-    const shareCode = encodeShareableState(
+    const shareQuery = encodeShareableState(
       url,
       drawerState.isOpen ? drawerState.filePath ?? undefined : undefined,
     );
-    const shareUrl = \`\${window.location.origin}\${window.location.pathname}?state=\${shareCode}\`;
+    const shareUrl = \`\${window.location.origin}\${window.location.pathname}?\${shareQuery}\`;
 
     if (navigator?.clipboard?.writeText) {
       void navigator.clipboard.writeText(shareUrl).then(() => {
@@ -1498,64 +1437,44 @@ export function formatRepoStats(totalFiles: number, filteredFiles: number): {
 }
 
 /**
- * Encode current explorer state into a base64 string for shareable URLs.
+ * Encode current explorer state into clean URL query params.
  */
 export function encodeShareableState(url: string, activeNode?: string): string {
   if (!url) return '';
-
-  try {
-    const payload = { url, activeNode: activeNode || null };
-    const jsonString = JSON.stringify(payload);
-    
-    if (typeof window !== 'undefined' && typeof window.btoa === 'function') {
-      return window.btoa(encodeURIComponent(jsonString));
-    }
-    
-    if (typeof Buffer !== 'undefined') {
-      return Buffer.from(encodeURIComponent(jsonString), 'utf-8').toString('base64');
-    }
-
-    return '';
-  } catch {
-    return '';
-  }
+  const params = new URLSearchParams();
+  params.set('url', url);
+  if (activeNode) params.set('node', activeNode);
+  return params.toString();
 }
 
 /**
- * Decode shared state from a base64 string payload.
+ * Decode shared state from URL query params (or legacy base64 string).
  */
-export function decodeShareableState(encodedStr: string): { url: string; activeNode?: string } | null {
-  if (!encodedStr || typeof encodedStr !== 'string') return null;
+export function decodeShareableState(paramStr: string): { url: string; activeNode?: string } | null {
+  if (!paramStr || typeof paramStr !== 'string') return null;
 
   try {
-    let rawDecoded = '';
-    
-    if (typeof window !== 'undefined' && typeof window.atob === 'function') {
-      rawDecoded = window.atob(encodedStr);
-    } else if (typeof Buffer !== 'undefined') {
-      rawDecoded = Buffer.from(encodedStr, 'base64').toString('utf-8');
-    } else {
-      return null;
+    // 1. Try standard URL query string (e.g. "url=https...&node=...")
+    if (paramStr.includes('url=')) {
+      const params = new URLSearchParams(paramStr.startsWith('?') ? paramStr.slice(1) : paramStr);
+      const url = params.get('url');
+      if (url) {
+        return {
+          url,
+          activeNode: params.get('node') || undefined,
+        };
+      }
     }
 
-    let jsonString = rawDecoded;
-    try {
-      jsonString = decodeURIComponent(rawDecoded);
-    } catch {
-      // Use rawDecoded directly if not percent-encoded
+    // 2. Legacy base64 fallback
+    const raw = typeof window !== 'undefined' ? window.atob(paramStr) : Buffer.from(paramStr, 'base64').toString('utf-8');
+    const parsed = JSON.parse(decodeURIComponent(raw));
+    if (parsed && typeof parsed.url === 'string') {
+      return { url: parsed.url, activeNode: parsed.activeNode || undefined };
     }
+  } catch {}
 
-    const parsed = JSON.parse(jsonString);
-    if (parsed && typeof parsed === 'object' && typeof parsed.url === 'string') {
-      return {
-        url: parsed.url,
-        activeNode: typeof parsed.activeNode === 'string' ? parsed.activeNode : undefined,
-      };
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  return null;
 }`;
 
 const RAW_CODEVIEWER = `import Prism from 'prismjs';
@@ -1588,14 +1507,12 @@ const EXTENSION_LANGUAGE_MAP: Record<string, string> = {
 export function getLanguageFromPath(filePath: string): string {
   if (!filePath || typeof filePath !== 'string') return 'clike';
 
-  const cleanPath = filePath.split('?')[0].split('#')[0];
-  const lastDot = cleanPath.lastIndexOf('.');
-
-  if (lastDot === -1 || lastDot === cleanPath.length - 1) {
+  const lastDot = filePath.lastIndexOf('.');
+  if (lastDot === -1 || lastDot === filePath.length - 1) {
     return 'clike';
   }
 
-  const extension = cleanPath.slice(lastDot + 1).toLowerCase();
+  const extension = filePath.slice(lastDot + 1).toLowerCase();
   return EXTENSION_LANGUAGE_MAP[extension] ?? 'clike';
 }
 
@@ -1700,7 +1617,6 @@ type NodeData = {
   [key: string]: unknown;
 };
 
-type LabelFilterMode = 'smart' | 'all' | 'none';
 type TraceMode = 'full' | 'direct';
 
 const COLUMNS = 4;
@@ -1713,7 +1629,7 @@ const ROW_HEIGHT = 120;
 function computeTracePath(
   selectedNodeId: string | null,
   edges: FlowEdgeItem[],
-  traceMode: TraceMode
+  _traceMode?: TraceMode
 ): { connectedNodeIds: Set<string>; connectedEdgeIds: Set<string> } {
   if (!selectedNodeId) {
     return { connectedNodeIds: new Set(), connectedEdgeIds: new Set() };
@@ -1722,59 +1638,14 @@ function computeTracePath(
   const connectedNodeIds = new Set<string>();
   const connectedEdgeIds = new Set<string>();
 
-  if (traceMode === 'direct') {
-    for (const edge of edges) {
-      if (edge.source === selectedNodeId) {
-        connectedNodeIds.add(edge.target);
-        connectedEdgeIds.add(edge.id);
-      }
-      if (edge.target === selectedNodeId) {
-        connectedNodeIds.add(edge.source);
-        connectedEdgeIds.add(edge.id);
-      }
-    }
-    return { connectedNodeIds, connectedEdgeIds };
-  }
-
-  // กรณี Full Trace (สืบย้อนทั้ง Ancestors และ Descendants)
-  const incomingMap = new Map<string, Array<{ source: string; edgeId: string }>>();
-  const outgoingMap = new Map<string, Array<{ target: string; edgeId: string }>>();
-
   for (const edge of edges) {
-    if (!outgoingMap.has(edge.source)) outgoingMap.set(edge.source, []);
-    outgoingMap.get(edge.source)!.push({ target: edge.target, edgeId: edge.id });
-
-    if (!incomingMap.has(edge.target)) incomingMap.set(edge.target, []);
-    incomingMap.get(edge.target)!.push({ source: edge.source, edgeId: edge.id });
-  }
-
-  const visitedDescendants = new Set<string>();
-  const queueDesc = [selectedNodeId];
-  while (queueDesc.length > 0) {
-    const curr = queueDesc.shift()!;
-    const outs = outgoingMap.get(curr) || [];
-    for (const { target, edgeId } of outs) {
-      connectedEdgeIds.add(edgeId);
-      if (!visitedDescendants.has(target)) {
-        visitedDescendants.add(target);
-        connectedNodeIds.add(target);
-        queueDesc.push(target);
-      }
+    if (edge.source === selectedNodeId) {
+      connectedNodeIds.add(edge.target);
+      connectedEdgeIds.add(edge.id);
     }
-  }
-
-  const visitedAncestors = new Set<string>();
-  const queueAnc = [selectedNodeId];
-  while (queueAnc.length > 0) {
-    const curr = queueAnc.shift()!;
-    const ins = incomingMap.get(curr) || [];
-    for (const { source, edgeId } of ins) {
-      connectedEdgeIds.add(edgeId);
-      if (!visitedAncestors.has(source)) {
-        visitedAncestors.add(source);
-        connectedNodeIds.add(source);
-        queueAnc.push(source);
-      }
+    if (edge.target === selectedNodeId) {
+      connectedNodeIds.add(edge.source);
+      connectedEdgeIds.add(edge.id);
     }
   }
 
@@ -1889,24 +1760,20 @@ const CRITICAL_ARCHITECTURAL_LABELS = new Set(['routes to', 'renders', 'server a
 function toRfEdges(
   items: FlowEdgeItem[],
   selectedNodeId: string | null,
-  connectedEdgeIds: Set<string>,
-  labelMode: LabelFilterMode
+  connectedEdgeIds: Set<string>
 ): Edge[] {
   return (items ?? []).map((item) => {
     const isConnected = selectedNodeId ? connectedEdgeIds.has(item.id) : true;
 
+    // โหมด Smart เสมอ: แสดงป้ายชื่อเฉพาะสายสัมพันธ์หลัก หรือโหนดที่ถูกเลือก
     let displayLabel: string | undefined = undefined;
-    if (labelMode === 'all') {
-      displayLabel = item.label;
-    } else if (labelMode === 'smart') {
-      if (selectedNodeId) {
-        if (isConnected) {
-          displayLabel = item.label;
-        }
-      } else {
-        if (item.label && CRITICAL_ARCHITECTURAL_LABELS.has(item.label.toLowerCase())) {
-          displayLabel = item.label;
-        }
+    if (selectedNodeId) {
+      if (isConnected) {
+        displayLabel = item.label;
+      }
+    } else {
+      if (item.label && CRITICAL_ARCHITECTURAL_LABELS.has(item.label.toLowerCase())) {
+        displayLabel = item.label;
       }
     }
 
@@ -1954,7 +1821,6 @@ function toRfEdges(
 // คอมโพเนนต์ภายในที่ใช้ hook ของ React Flow ได้โดยตรง
 function FlowCanvasInner({ nodes, edges, onSelectNode }: FlowCanvasProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [labelMode, setLabelMode] = useState<LabelFilterMode>('smart');
   const [traceMode, setTraceMode] = useState<TraceMode>('full');
   const [showMiniMap, setShowMiniMap] = useState<boolean>(false);
   const [autoInspect, setAutoInspect] = useState<boolean>(false);
@@ -1987,8 +1853,8 @@ function FlowCanvasInner({ nodes, edges, onSelectNode }: FlowCanvasProps) {
   );
 
   const initialEdges = useMemo(
-    () => toRfEdges(edges, selectedNodeId, connectedEdgeIds, labelMode),
-    [edges, selectedNodeId, connectedEdgeIds, labelMode]
+    () => toRfEdges(edges, selectedNodeId, connectedEdgeIds),
+    [edges, selectedNodeId, connectedEdgeIds]
   );
 
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node<NodeData>>(initialNodes);
@@ -2233,42 +2099,6 @@ function FlowCanvasInner({ nodes, edges, onSelectNode }: FlowCanvasProps) {
           {/* Settings Menu Dropdown */}
           {showSettingsMenu && (
             <div className="absolute right-0 top-full mt-1.5 w-56 bg-[#0a0a0a] border border-[#262626] rounded-md shadow-2xl z-50 p-2 flex flex-col gap-2 text-xs">
-              <div>
-                <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block mb-1">
-                  การแสดงป้ายกำกับเส้น
-                </span>
-                <div className="grid grid-cols-3 gap-1 bg-[#000000] p-1 rounded border border-[#262626]">
-                  <button
-                    type="button"
-                    onClick={() => setLabelMode('smart')}
-                    className={\`py-1 rounded text-[10px] font-medium transition cursor-pointer \${
-                      labelMode === 'smart' ? 'bg-[#262626] text-white font-semibold' : 'text-zinc-400 hover:text-white'
-                    }\`}
-                  >
-                    สมาร์ท
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setLabelMode('all')}
-                    className={\`py-1 rounded text-[10px] font-medium transition cursor-pointer \${
-                      labelMode === 'all' ? 'bg-[#262626] text-white font-semibold' : 'text-zinc-400 hover:text-white'
-                    }\`}
-                  >
-                    ทั้งหมด
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setLabelMode('none')}
-                    className={\`py-1 rounded text-[10px] font-medium transition cursor-pointer \${
-                      labelMode === 'none' ? 'bg-[#262626] text-white font-semibold' : 'text-zinc-400 hover:text-white'
-                    }\`}
-                  >
-                    ปิด
-                  </button>
-                </div>
-              </div>
-
-              <div className="h-[1px] bg-[#262626]" />
 
               <div>
                 <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block mb-1">

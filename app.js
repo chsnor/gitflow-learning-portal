@@ -1741,7 +1741,12 @@ let fndexSelectedOwner = "all";
 
 function filterFndex(query, owner) {
   if (query !== undefined) fndexSearchQuery = query.toLowerCase().trim();
-  if (owner !== undefined) fndexSelectedOwner = owner;
+  if (owner !== undefined) {
+    fndexSelectedOwner = owner;
+    document.querySelectorAll("#fndex-owner-chips button").forEach((btn) => {
+      btn.setAttribute("aria-pressed", btn.getAttribute("data-owner") === owner ? "true" : "false");
+    });
+  }
   renderFndexList();
 }
 window.filterFndex = filterFndex;
@@ -1834,14 +1839,20 @@ function renderFndexView() {
   const el = document.getElementById("fndex-body");
   if (!el) return;
 
+  const list = (typeof ALL_FUNCTIONS_DIRECTORY !== "undefined" ? ALL_FUNCTIONS_DIRECTORY : []);
+  const countByOwner = {};
+  list.forEach((fn) => {
+    countByOwner[fn.owner] = (countByOwner[fn.owner] || 0) + 1;
+  });
+
   const owners = [
-    { id: "all", label: "ทั้งหมด (50 ฟังก์ชัน)" },
-    { id: "คน 1", label: "คน 1: GitHub Service (5)" },
-    { id: "คน 2", label: "คน 2: Parser Engine (6)" },
-    { id: "คน 3", label: "คน 3: Flow Generator & Canvas (10)" },
-    { id: "คน 4", label: "คน 4: Dashboard & FlowExplorer (13)" },
-    { id: "คน 5", label: "คน 5: Side Drawer & Code Viewer (7)" },
-    { id: "คน 6", label: "คน 6: Core Pipeline & Route (9)" }
+    { id: "all", label: `ทั้งหมด (${list.length} ฟังก์ชัน)` },
+    { id: "คน 1", label: `คน 1: GitHub Service (${countByOwner["คน 1"] || 0})` },
+    { id: "คน 2", label: `คน 2: Parser Engine (${countByOwner["คน 2"] || 0})` },
+    { id: "คน 3", label: `คน 3: Flow Generator & Canvas (${countByOwner["คน 3"] || 0})` },
+    { id: "คน 4", label: `คน 4: Dashboard & FlowExplorer (${countByOwner["คน 4"] || 0})` },
+    { id: "คน 5", label: `คน 5: Side Drawer & Code Viewer (${countByOwner["คน 5"] || 0})` },
+    { id: "คน 6", label: `คน 6: Core Pipeline & Route (${countByOwner["คน 6"] || 0})` }
   ];
 
   el.innerHTML = `
@@ -1864,11 +1875,12 @@ function renderFndexView() {
           </span>
         </div>
 
-        <div style="display:flex; gap:6px; flex-wrap:wrap;" role="tablist" aria-label="กรองตามผู้รับผิดชอบ">
+        <div id="fndex-owner-chips" style="display:flex; gap:6px; flex-wrap:wrap;" role="tablist" aria-label="กรองตามผู้รับผิดชอบ">
           ${owners.map((o) => `
             <button
               type="button"
               class="side-chip"
+              data-owner="${o.id}"
               onclick="filterFndex(undefined, '${o.id}')"
               aria-pressed="${fndexSelectedOwner === o.id}"
               style="font-size:11.5px; padding:4px 10px;"
