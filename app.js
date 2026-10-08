@@ -1703,7 +1703,7 @@ function renderDeepView() {
       <div class="qa-deep">${esc(d.deep)}</div>
       <div class="qa-block">
         <div class="qa-block-head">รายละเอียด</div>
-        <ul class="qa-list">${d.bullets.map((b) => `<li>${esc(b)}</li>`).join("")}</ul>
+        <ul class="qa-list">${d.bullets.map((b) => `<li>${esc(b).replace(/\n/g, '<br/>')}</li>`).join("")}</ul>
       </div>
       ${d.libs && d.libs.length ? `<div class="qa-block">
         <div class="qa-block-head">ไลบรารีที่เกี่ยวข้อง</div>
