@@ -1795,9 +1795,30 @@ function renderFndexList() {
           </button>
         </div>
 
-        <div style="font-size:12px; color:var(--color-ink-dim); line-height:1.55;">
+        <div style="font-size:12.5px; color:var(--color-ink); line-height:1.6; font-weight:500;">
           ${esc(fn.desc)}
         </div>
+
+        ${fn.jargon ? `
+          <div style="background:color-mix(in oklab, var(--color-accent) 7%, var(--color-deep)); border-left:3px solid var(--color-accent); border-radius:6px; padding:8px 11px; font-size:11.5px; line-height:1.55; color:var(--color-ink-dim);">
+            <strong style="color:var(--color-accent); font-size:11px; display:block; margin-bottom:3px;">🔑 ถอดรหัสคำศัพท์เทคนิค:</strong>
+            ${esc(fn.jargon).replace(/\\n/g, '<br/>')}
+          </div>
+        ` : ''}
+
+        ${fn.deepExplain ? `
+          <div style="background:color-mix(in oklab, var(--color-accent2) 8%, var(--color-deep)); border-left:3px solid var(--color-accent2); border-radius:6px; padding:8px 11px; font-size:11.5px; line-height:1.55; color:var(--color-ink-dim);">
+            <strong style="color:var(--color-accent2); font-size:11px; display:block; margin-bottom:3px;">💡 เคล็ดลับตอบเมื่ออาจารย์ถามลึก:</strong>
+            ${esc(fn.deepExplain)}
+          </div>
+        ` : ''}
+
+        ${fn.pythonAnalogy ? `
+          <div style="background:var(--color-deep); border-radius:6px; padding:6px 11px; font-size:11px; color:var(--color-ink-faint); display:flex; align-items:center; gap:6px;">
+            <span style="font-size:13px;">🐍</span>
+            <span><strong style="color:var(--color-ink-dim);">เทียบกับ Python:</strong> ${esc(fn.pythonAnalogy)}</span>
+          </div>
+        ` : ''}
 
         <div style="margin-top:auto; padding-top:6px; border-top:1px solid var(--color-line-soft); display:flex; items-center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
           <code style="font-size:11px; color:var(--color-accent2); background:var(--color-deep); padding:2px 6px; border-radius:4px; border:1px solid var(--color-line-soft); max-width:100%; overflow-x:auto; white-space:nowrap; display:block;">
