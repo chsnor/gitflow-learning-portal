@@ -6,14 +6,14 @@
 const RAW_PIPELINE = `import { parseGitHubUrl, buildGitHubApiUrl, buildGitHubHeaders } from './github';
 import { filterTreeFiles, detectNextFileType, extractImportsFromCode } from './parser';
 import { buildFlowElements } from './generator';
-import { AnalysisResult, GitHubTreeItem, CodeRelation, NextFileType, FlowNodeItem, FlowEdgeItem } from '../types';
+import { AnalysisResult, GitHubTreeItem, CodeRelation, NextFileType } from '../types';
 
 const MAX_FILTERED_FILES = 500;
 const MAX_RAW_FETCH_FILES = 45;
 const FETCH_TIMEOUT_MS = 4000;
 
 // Simple in-memory cache to prevent redundant GitHub requests
-export const pipelineCache = new Map<string, AnalysisResult>();
+const pipelineCache = new Map<string, AnalysisResult>();
 
 const COMMON_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.jsx', '/index.ts', '/index.tsx', '/index.js'];
 
@@ -87,7 +87,7 @@ function resolveImportToFilePath(
 /**
  * Infer structural graph relations based on Next.js App Router conventions.
  */
-export function inferStructuralRelations(
+function inferStructuralRelations(
   files: Array<{ path: string; fileType: NextFileType }>
 ): CodeRelation[] {
   const relations: CodeRelation[] = [];
@@ -681,7 +681,7 @@ import { CodeRelation, NextFileType, FlowNodeItem, FlowEdgeItem } from '../types
 /**
  * Sanitize file path into a safe, alphanumeric node identifier for React Flow.
  */
-export function sanitizeNodeId(pathStr: string): string {
+function sanitizeNodeId(pathStr: string): string {
   const id = pathStr
     .replace(/[()]/g, '')
     .replace(/[^a-zA-Z0-9]+/g, '_')
@@ -862,7 +862,7 @@ export default function HomePage() {
 
 const RAW_FLOWEXPLORER = `'use client';
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { AnalysisResult, NextFileType, SideDrawerState, FlowNodeItem } from '../types';
 import { FlowCanvas } from './FlowCanvas';
 import { SideDrawer } from './SideDrawer';
@@ -872,7 +872,7 @@ import {
   encodeShareableState, 
   decodeShareableState 
 } from '../lib/ui-helper';
-import { buildGitHubRawUrl, buildGitHubBlobUrl, parseGitHubUrl } from '../lib/github';
+import { buildGitHubRawUrl, buildGitHubBlobUrl } from '../lib/github';
 import { Share2, Check, Sparkles, AlertCircle, X } from 'lucide-react';
 
 const SAMPLE_REPOSITORIES = [
@@ -905,15 +905,10 @@ export function FlowExplorer() {
   async function handleSelectNode(
     filePath: string, 
     fileType: NextFileType,
-    overrideOwner?: string,
-    overrideRepo?: string,
-    overrideBranch?: string
+    owner = result?.owner,
+    repo = result?.repoName,
+    branch = result?.branch || 'main'
   ) {
-    const parsed = parseGitHubUrl(url);
-    const owner = overrideOwner || result?.owner || parsed?.owner || '';
-    const repo = overrideRepo || result?.repoName || parsed?.repo || '';
-    const branch = overrideBranch || result?.branch || parsed?.branch || 'HEAD';
-
     if (!owner || !repo) {
       setErrorMessage('ไม่พบข้อมูล Repository หรือ Owner สำหรับดึงโค้ด');
       return;
@@ -935,19 +930,7 @@ export function FlowExplorer() {
       const headers: Record<string, string> = {};
       if (token?.trim()) headers['Authorization'] = \`Bearer \${token.trim()}\`;
 
-      let res = await fetch(rawUrl, { headers });
-      if (!res.ok && res.status === 404 && branch !== 'HEAD') {
-        const headRawUrl = buildGitHubRawUrl(owner, repo, filePath, 'HEAD');
-        const headRes = await fetch(headRawUrl, { headers });
-        if (headRes.ok) {
-          res = headRes;
-          setDrawerState((prev) => ({
-            ...prev,
-            githubRawUrl: buildGitHubBlobUrl(owner, repo, filePath, 'HEAD'),
-          }));
-        }
-      }
-
+      const res = await fetch(rawUrl, { headers });
       if (!res.ok) throw new Error(\`ไม่สามารถดึงไฟล์ได้ (HTTP \${res.status})\`);
       const code = await res.text();
 
@@ -982,23 +965,14 @@ export function FlowExplorer() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        let errText = errorData.error || 'ไม่สามารถวิเคราะห์ข้อมูลจาก GitHub ได้';
-        if (response.status === 401 || errText.includes('401') || errText.includes('Bad credentials')) {
-          errText = errorData.error || '❌ GitHub Token ไม่ถูกต้อง (401 Bad credentials) กรุณาตรวจสอบ Token อีกครั้ง หรือเว้นว่างไว้เพื่อใช้งานแบบสาธารณะ';
-        } else if (response.status === 403 || errText.includes('Rate Limit')) {
-          errText = 'GitHub API ติด Rate Limit (จำกัดการร้องขอต่อชั่วโมง) กรุณารอสักครู่แล้วลองใหม่อีกครั้ง';
-        }
-        throw new Error(errText);
+        throw new Error(errorData.error || 'ไม่สามารถวิเคราะห์ข้อมูลจาก GitHub ได้');
       }
 
       const data: AnalysisResult = await response.json();
       setResult(data);
 
       if (activeFilePath) {
-        const parsed = parseGitHubUrl(cleanUrl);
-        if (parsed) {
-          void handleSelectNode(activeFilePath, 'other', parsed.owner, parsed.repo, parsed.branch);
-        }
+        void handleSelectNode(activeFilePath, 'other', data.owner, data.repoName, data.branch);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ';
@@ -1011,27 +985,17 @@ export function FlowExplorer() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const searchParams = new URLSearchParams(window.location.search);
-    const stateParam = searchParams.get('state');
-    const directUrl = searchParams.get('url');
-
-    let targetUrl: string | undefined = undefined;
-    let targetNode: string | undefined = undefined;
-
-    if (directUrl) {
-      targetUrl = directUrl;
-      targetNode = searchParams.get('node') || undefined;
-    } else if (stateParam) {
-      const decoded = decodeShareableState(stateParam);
-      if (decoded?.url) {
-        targetUrl = decoded.url;
-        targetNode = decoded.activeNode;
-      }
-    }
+    const decoded = decodeShareableState(searchParams.get('state') || '');
+    const targetUrl = searchParams.get('url') || decoded?.url;
+    const targetNode = searchParams.get('node') || decoded?.activeNode;
 
     if (targetUrl) {
-      setUrl(targetUrl);
-      void executeAnalysis(targetUrl, token, targetNode);
+      setTimeout(() => {
+        setUrl(targetUrl);
+        void executeAnalysis(targetUrl, token, targetNode || undefined);
+      }, 0);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -1624,32 +1588,61 @@ const COL_WIDTH = 320;
 const ROW_HEIGHT = 120;
 
 /**
- * Compute upstream and downstream connected nodes and edges for highlighted flow tracing.
+ * คำนวณเส้นทางและโหนดที่เชื่อมโยงด้วย Breadth-First Search (BFS)
+ * - direct: ตรวจเฉพาะเพื่อนบ้านระยะ 1 ก้าว
+ * - full: ท่องหาความเชื่อมโยงครบทั้งสายงาน (BFS) พร้อม Visited Set ป้องกัน Infinite Loop
  */
 function computeTracePath(
   selectedNodeId: string | null,
   edges: FlowEdgeItem[],
-  _traceMode?: TraceMode
+  traceMode: TraceMode = 'full'
 ): { connectedNodeIds: Set<string>; connectedEdgeIds: Set<string> } {
   if (!selectedNodeId) {
     return { connectedNodeIds: new Set(), connectedEdgeIds: new Set() };
   }
 
-  const connectedNodeIds = new Set<string>();
   const connectedEdgeIds = new Set<string>();
+  const visitedNodes = new Set<string>([selectedNodeId]);
 
-  for (const edge of edges) {
-    if (edge.source === selectedNodeId) {
-      connectedNodeIds.add(edge.target);
-      connectedEdgeIds.add(edge.id);
+  // 1. โหมด 1-Step: ดูเฉพาะเพื่อนบ้านที่เชื่อมติดกันโดยตรง
+  if (traceMode === 'direct') {
+    for (const edge of edges) {
+      if (edge.source === selectedNodeId || edge.target === selectedNodeId) {
+        connectedEdgeIds.add(edge.id);
+        visitedNodes.add(edge.source);
+        visitedNodes.add(edge.target);
+      }
     }
-    if (edge.target === selectedNodeId) {
-      connectedNodeIds.add(edge.source);
-      connectedEdgeIds.add(edge.id);
+    return { connectedNodeIds: visitedNodes, connectedEdgeIds };
+  }
+
+  // 2. โหมดทั้งสาย: ใช้ BFS ท่องกราฟเป็นระลอกคลื่น
+  const queue: string[] = [selectedNodeId];
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+
+    for (const edge of edges) {
+      // เดินตามน้ำ (Downstream)
+      if (edge.source === current) {
+        connectedEdgeIds.add(edge.id);
+        if (!visitedNodes.has(edge.target)) {
+          visitedNodes.add(edge.target);
+          queue.push(edge.target);
+        }
+      }
+      // เดินทวนน้ำ (Upstream)
+      if (edge.target === current) {
+        connectedEdgeIds.add(edge.id);
+        if (!visitedNodes.has(edge.source)) {
+          visitedNodes.add(edge.source);
+          queue.push(edge.source);
+        }
+      }
     }
   }
 
-  return { connectedNodeIds, connectedEdgeIds };
+  return { connectedNodeIds: visitedNodes, connectedEdgeIds };
 }
 
 /**
@@ -1933,12 +1926,8 @@ function FlowCanvasInner({ nodes, edges, onSelectNode }: FlowCanvasProps) {
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as globalThis.Node;
-      if (searchContainerRef.current && !searchContainerRef.current.contains(target)) {
-        setIsSearchOpen(false);
-      }
-      if (settingsMenuRef.current && !settingsMenuRef.current.contains(target)) {
-        setShowSettingsMenu(false);
-      }
+      if (!searchContainerRef.current?.contains(target)) setIsSearchOpen(false);
+      if (!settingsMenuRef.current?.contains(target)) setShowSettingsMenu(false);
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
