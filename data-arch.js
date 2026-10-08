@@ -12,18 +12,21 @@ const ARCH_LAYERS = [
     steps: [
       { t: "ตรวจโดเมน", d: "ต้องเป็น github.com เท่านั้น ผ่าน regex ใน parseGitHubUrl", ref: ["github", 15] },
       { t: "แยก segment", d: "ตัด .git ท้าย URL แล้วแยก owner / repo / branch", ref: ["github", 28] },
-      { t: "ประกอบ URL", d: "buildGitHubApiUrl ประกอบ /git/trees/{branch}?recursive=1", ref: ["github", 44] },
-      { t: "แนบ Token", d: "buildGitHubHeaders ใส่ User-Agent และ Bearer token ถ้ามี", ref: ["github", 51] },
-      { t: "Raw CDN", d: "buildGitHubRawUrl ใช้ดึงตัวโค้ดดิบของแต่ละไฟล์ภายหลัง", ref: ["github", 66] }
+      { t: "ประกอบ URL Trees API", d: "buildGitHubApiUrl ประกอบ api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1", ref: ["github", 44] },
+      { t: "แนบ Header สากล", d: "buildGitHubHeaders ใส่ User-Agent: GitFlow-Visualizer (บังคับ) และ Bearer token ถ้ามี", ref: ["github", 51] },
+      { t: "ตอบกลับ JSON ต้นไม้ไฟล์", d: "รับ sha, truncated, และ tree: [{ path, type: 'blob'|'tree', size, sha }]", ref: ["pipeline", 268] },
+      { t: "ดึงโค้ดดิบต่อจาก Raw CDN", d: "buildGitHubRawUrl ยิง raw.githubusercontent.com ดึงเนื้อหาข้อความดิบ 45 ไฟล์แรก", ref: ["github", 66] }
     ],
     edge: [
-      "repo ที่ใช้ branch 'master' → pipeline จับ 404 แล้ว fallback อัตโนมัติ (pipeline 313-323)",
+      "repo ที่ใช้ branch 'master' → pipeline จับ 404 แล้ว fallback อัตโนมัติ (pipeline 244-253)",
       "token ว่าง/เว้นวรรค → ตัด .trim() แล้วข้าม Authorization (github 56-58)",
-      "ไม่มีสิทธิ์เข้าถึง → 403 → ต้องขึ้นข้อความแนะนำให้ใส่ Token (pipeline 461-461)"
+      "ไม่มีสิทธิ์เข้าถึง → 403 Rate Limit → แจ้งให้ผู้ใช้ใส่ Token ปลดล็อก 60 เป็น 5,000 req/ชม. (pipeline 262-264)"
     ],
     decisions: [
-      { q: "ทำไมใช้ Trees API ไม่ยิงทีละโฟลเดอร์", a: "1 คำขอ = ทั้งโปรเจกต์ rate limit จาก O(n) เหลือ O(1) และไม่ต้องเดา path" },
-      { q: "ทำไมต้องมี fallback main→master", a: "repo เก่าส่วนใหญ่ใช้ master ไม่มี fallback ระบบจะใช้กับคลังเก่าไม่ได้" }
+      { q: "เราส่งอะไรไปหา GitHub API?", a: "GET request ไปที่ /git/trees/{branch}?recursive=1 แนบ Header: User-Agent: GitFlow-Visualizer และ Authorization: Bearer <token>" },
+      { q: "GitHub API ส่งอะไรคืนมา?", a: "JSON Payload มีฟิลด์ tree เป็นอาร์เรย์ของทุกไฟล์ (path, type='blob'/'tree', size) — ยังไม่มีโค้ดดิบข้างในไฟล์" },
+      { q: "ทำไมใช้ Trees API ไม่ยิงทีละโฟลเดอร์?", a: "1 คำขอ = ได้ผังทั้งโปรเจกต์ด้วย ?recursive=1 ลด rate limit จาก O(n) เหลือ O(1) และไม่ต้องเดา path" },
+      { q: "ทำไมต้องมี fallback main→master?", a: "repo เก่าส่วนใหญ่ใช้ master ไม่มี fallback ระบบจะใช้กับคลังเก่าไม่ได้" }
     ],
     extend: ["ต่อท้าย provider เป็น strategy object รองรับ GitLab/Bitbucket", "ใช้ GitHub GraphQL ดึงหลายไฟล์พร้อม content ในคำขอเดียว"]
   },
@@ -161,31 +164,29 @@ const ARCH_LAYERS = [
     files: ["page", "flowcanvas", "sidedrawer", "uihelper", "codeviewer", "layout", "types"],
     io: "เข้า: AnalysisResult → ออก: กราฟ + รายละเอียดไฟล์ + ตัวอ่านโค้ด",
     steps: [
-      { t: "รับผล", d: "page.tsx ยิง POST แล้ว setResult(data)", ref: ["flowexplorer", 114] },
-      { t: "ตรวจ ok", d: "ถ้า !response.ok โยน error พร้อมข้อความจาก API", ref: ["flowexplorer", 120] },
-      { t: "กรองตามประเภทไฟล์", d: "ปุ่ม ALL / PAGE / COMPONENT / ACTION / STORE กรอง displayedNodes & displayedEdges ผ่าน useMemo", ref: ["flowexplorer", 200] },
-      { t: "แถบปุ่มกรอง (Filter Tabs)", d: "แถบสไตล์ Vercel Monochrome สลับ filterType และนับจำนวนโหนดแต่ละประเภท", ref: ["flowexplorer", 382] },
-      { t: "ค้นหาโหนด (Ctrl+K / '/')", d: "กล่องค้นหาโหนด Node Finder พร้อมคีย์ลัด ค้นหาตามชื่อไฟล์และพาธ แล้ว Pan เลื่อนกล้องไปหาโหนดทันที", ref: ["flowcanvas", 418] },
-      { t: "สืบย้อนความสัมพันธ์ (Trace Flow)", d: "computeTracePath ส่อง Ancestors/Descendants เลือกโหมด 'ทั้งสาย' หรือ '1-Step' ได้", ref: ["flowcanvas", 48] },
-      { t: "ตัวเลือกมุมมอง (MiniMap & ป้ายกำกับ)", d: "ปุ่มไอคอนแผนที่ย่อ MiniMap และปุ่มตั้งค่า (Sliders) ปรับป้ายกำกับเส้น: สมาร์ท / ทั้งหมด / ปิด", ref: ["flowcanvas", 495] },
-      { t: "คำนวณสถิติ & สุขภาพโค้ด", d: "formatRepoStats + calculateHealthScore แปลงตัวเลขเป็นเกรด A/B/C", ref: ["uihelper", 44] },
-      { t: "ตรวจ URL ก่อนยิง", d: "validateUrlInput เตือนผู้ใช้ก่อนเสียเวลายิง API", ref: ["uihelper", 4] },
-      { t: "วาดกราฟ React Flow", d: "FlowCanvas รับ nodes/edges แล้วจัดวางด้วย Dagre", ref: ["flowcanvas", 10] },
-      { t: "เปิด drawer", d: "คลิก node → SideDrawer เปิดพร้อมไฟล์และบรรทัดที่เกี่ยวข้อง", ref: ["sidedrawer", 20] },
-      { t: "ตัดโค้ดให้พอดี", d: "formatCodeSnippet ตัดที่ maxLines = 300 ไม่ให้หน้าค้าง", ref: ["codeviewer", 53] },
-      { t: "ไฮไลต์โค้ด Prism", d: "highlightCodeWithPrism เลือกภาษาจากนามไฟล์", ref: ["codeviewer", 91] },
-      { t: "แชร์ลิงก์", d: "encodeShareableState เก็บ url + node ลง query string", ref: ["uihelper", 63] },
-      { t: "ฟอนต์ไทย", d: "IBM Plex Sans Thai ผ่าน next/font + display swap", ref: ["layout", 15] }
+      { t: "1. รับผลและเรนเดอร์", d: "FlowExplorer ยิง POST แล้ว setResult(data) ส่งต่อให้ FlowCanvas วาดผัง", ref: ["flowexplorer", 86] },
+      { t: "2. คลิกโหนดส่อง BFS (Interactive)", d: "onNodeClick เรียก computeTracePath ท่อง BFS ด้วย Queue + Visited Set (1-Step vs Full)", ref: ["flowcanvas", 49] },
+      { t: "3. สลับโหมดสืบย้อน (Interactive)", d: "ปุ่มสลับ Direct / Full ปรับ traceMode คำนวณความเชื่อมโยงใหม่ 0ms ในหน่วยความจำ", ref: ["flowcanvas", 61] },
+      { t: "4. กดดูโค้ด Side Drawer (Interactive)", d: "handleSelectNode ดึง rawUrl ถ้ายังไม่มีโค้ด ➔ highlightCodeWithPrism ➔ กด Escape เพื่อปิด", ref: ["flowexplorer", 43] },
+      { t: "5. ค้นหาและแพนกล้อง (Interactive)", d: "กด Ctrl+K หรือ / ค้นหาโหนด ➔ setCenter(x, y, { zoom, duration }) เลื่อนมุมกล้องนุ่มนวล", ref: ["flowcanvas", 353] },
+      { t: "6. แชร์ผังผ่าน URL (Interactive)", d: "encodeShareableState ประกอบ ?url=...&node=... คัดลอกลง Clipboard และถอดรหัสฝั่งเปิดลิงก์", ref: ["uihelper", 41] },
+      { t: "7. กรองบทบาทสถาปัตยกรรม (Interactive)", d: "แถบชิป ALL/PAGE/COMPONENT/ACTION/STORE กรอง displayedNodes & Edges ผ่าน useMemo", ref: ["flowexplorer", 200] },
+      { t: "ตัวเลือกมุมมอง & MiniMap", d: "เปิด/ปิด MiniMap และสลับป้ายกำกับเส้น: สมาร์ท / ทั้งหมด / ปิด", ref: ["flowcanvas", 495] },
+      { t: "คำนวณสถิติ & สุขภาพโค้ด", d: "formatRepoStats + calculateHealthScore แปลงตัวเลขเป็นเกรด A/B/C", ref: ["uihelper", 22] },
+      { t: "ตรวจ URL ก่อนยิง", d: "validateUrlInput ตรวจ whitelist โดเมนและป้องกัน XSS ตั้งแต่หน้าบ้าน", ref: ["uihelper", 6] },
+      { t: "ตัดทอนและป้องกัน XSS", d: "formatCodeSnippet ตัดที่ 300 บรรทัด และ escapeHtml แปลงแท็กอันตราย", ref: ["codeviewer", 51] }
     ],
     edge: [
       "ผู้ใช้กรอก URL ผิด → validateUrlInput เตือนก่อนยิง API",
-      "คลิก node ที่ยังไม่มีโค้ดในแคช → ข้อความว่ายังไม่ได้ดึง ไม่ค้าง",
+      "คลิก node ที่ยังไม่มีโค้ดในแคช → ดาวน์โหลดสดจาก GitHub Raw CDN ทันที",
       "จอเล็ก → SideDrawer กลายเป็นแผงเต็มจอแทน slide-in",
-      "ลิงก์แชร์ผิดรูปแบบ → decodeShareableState คืน null แล้วใช้ค่าเริ่มต้น"
+      "ลิงก์แชร์ผิดรูปแบบ → decodeShareableState คืน null แล้วใช้ค่าเริ่มต้นอย่างปลอดภัย"
     ],
     decisions: [
-      { q: "ทำไมแยก ui-helper ออกมา", a: "ตรรกะคำนวณสถิติ/แปลงลิงก์ไม่ควรอยู่ใน component — ทดสอบเป็น unit test ได้ตรง ๆ" },
-      { q: "ทำไมตัดโค้ด 300 บรรทัด", a: "บางไฟล์ยาว 500+ บรรทัด การตัดคุมขนาด DOM และเวลาคลิกวาง cursor" }
+      { q: "โฟลว์การโต้ตอบของผู้ใช้ (User Interactions) มีอะไรบ้าง?", a: "มี 6 โฟลว์หลัก: คลิกโหนด (BFS Trace), สลับโหมด 1-Step/Full, ส่องซอร์สโค้ด (Side Drawer), ค้นหาโหนด (Ctrl+K แพนกล้อง), แชร์ลิงก์ (URLSearchParams), และกรองบทบาทไฟล์ (Filter Tabs)" },
+      { q: "ทำไมใช้ BFS + Visited Set ในการสืบย้อนความสัมพันธ์?", a: "เพื่อท่องหาโหนดที่เชื่อมโยงทั้งขาขึ้นและขาลงได้อย่างเป็นระบบ และ Visited Set ป้องกันการเกิด Infinite Loop จาก Circular Dependency ได้ 100%" },
+      { q: "ทำไมแยก ui-helper ออกมา?", a: "ตรรกะคำนวณสถิติ/แปลงลิงก์ไม่ควรอยู่ใน component — ทดสอบเป็น unit test ได้ตรง ๆ" },
+      { q: "ทำไมตัดโค้ด 300 บรรทัดใน Side Drawer?", a: "บางไฟล์ยาว 500+ บรรทัด การตัดคุมขนาด DOM และเวลาเรนเดอร์ Prism" }
     ],
     extend: ["โหมดส่งออก PNG/SVG ของกราฟ", "deep-link ราย node ใน URL เพื่อแชร์ตำแหน่งที่คุย", "virtualized list เมื่อไฟล์ยาวกว่า 3,000 บรรทัด"]
   }

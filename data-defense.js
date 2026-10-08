@@ -74,6 +74,39 @@ const PRESENTATION_PLAN = [
 
 const DEFENSE_DEEP = [
   {
+    id: "github_handshake", cat: "โปรโตคอล & API", q: "ระบบดึงคลังจาก GitHub มาได้ยังไง? เราส่งอะไรไป และ GitHub API ส่งอะไรคืนมา?",
+    short: "ส่ง GET พร้อม ?recursive=1 และ Header ไปยัง Git Trees API ได้สารบัญโครงสร้างไฟล์ทั้งระบบ แล้วจึงดึงโค้ดดิบ 45 ไฟล์จาก Raw CDN",
+    deep: "ระบบใช้สถาปัตยกรรมแบบ 2 จังหวะ: จังหวะที่ 1 ยิงถาม Git Trees API เพื่อขอสารบัญโครงสร้างไฟล์ทั้งคลังในคำขอเดียว (O(1) request) และจังหวะที่ 2 คัดเฉพาะ 45 ไฟล์สำคัญไปดึงเนื้อหาโค้ดดิบจาก Raw CDN แบบขนาน (Parallel Requests) พร้อมระบบสลับกิ่ง main ➔ master อัตโนมัติ",
+    bullets: [
+      "📤 1. สิ่งที่เราส่งไปหา GitHub Trees API (Client Request):\n  • Endpoint: https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1\n  • Method: GET\n  • Query Params: ?recursive=1 (สั่งให้ GitHub สำรวจลึกทะลุทุกโฟลเดอร์ย่อยในคำขอเดียว)\n  • Headers: User-Agent: GitFlow-Visualizer (กฎเหล็กของ GitHub หากไม่มีจะถูกปฏิเสธด้วย 403 Forbidden), Authorization: Bearer <token> (ถ้ามี เพื่อเพิ่มโควตาจาก 60 เป็น 5,000 ครั้ง/ชม.), และ Accept: application/vnd.github.v3+json",
+      "📥 2. สิ่งที่ GitHub API ส่งกลับมา (API Response Payload):\n  • Status Code: 200 OK (หรือ 401 เมื่อ Token ผิด, 404 เมื่อไม่พบคลัง/กิ่ง, 403 เมื่อติด Rate Limit)\n  • Response JSON Body:\n    {\n      \"sha\": \"fc9a3b8...\",\n      \"tree\": [\n        { \"path\": \"src/app/page.tsx\", \"mode\": \"100644\", \"type\": \"blob\", \"sha\": \"a1b...\", \"size\": 1420 },\n        { \"path\": \"src/components\", \"mode\": \"040000\", \"type\": \"tree\", \"sha\": \"e5f...\" }\n      ],\n      \"truncated\": false\n    }\n  • จุดสำคัญ: ใน tree อาร์เรย์ type: 'blob' คือไฟล์, type: 'tree' คือโฟลเดอร์ — ขั้นตอนนี้ได้เฉพาะสารบัญ ยังไม่มีเนื้อหาโค้ดข้างในไฟล์",
+      "⚡ 3. การดึงเนื้อหาโค้ดดิบต่อจาก Raw CDN (Fetching Raw Code):\n  • กรองไฟล์ขยะทิ้งด้วย filterTreeFiles เหลือไฟล์สำคัญสูงสุด 500 ไฟล์\n  • คัดเลือก 45 ไฟล์แรกส่งไปดึงโค้ดดิบแบบขนาน (Promise.all) ผ่าน URL: https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}\n  • ส่ง Header Authorization (ถ้ามี) พร้อม AbortSignal.timeout(4000) ตัดเวลาที่ 4 วินาที\n  • ได้ข้อความซอร์สโค้ดดิบ (Plain Text) ส่งเข้าสแกนหาคำสั่ง import ด้วย Regular Expression",
+      "🔀 4. กลไกสำรองสลับกิ่งอัตโนมัติ (Branch Fallback):\n  • เริ่มต้นระบบจะลองกิ่ง main ก่อน หาก GitHub ตอบ 404 Not Found ฟังก์ชัน fetchGitHubTree จะสลับไปขอกิ่ง master ให้อัตโนมัติทันที ทำให้รองรับคลังโค้ดรุ่นเก่าได้โดยไม่แครช"
+    ],
+    libs: [
+      { name: "Native Fetch + AbortSignal", why: "ดึงข้อมูลแบบ Lightweight ไม่มี dependency ภายนอก พร้อมคุม Timeout ได้ 100%", trade: "ต้องเขียนดักสถานะ HTTP 401, 403, 404 เองทั้งหมด" }
+    ],
+    extend: ["รองรับ GitHub GraphQL API เพื่อดึงรายชื่อไฟล์พร้อมเนื้อหาโค้ดในคำขอเดียว", "ทำ Branch Auto-Discovery ยิงถาม /repos/{owner}/{repo} เพื่ออ่าน default_branch ตัวจริง"]
+  },
+  {
+    id: "interaction_flows", cat: "สถาปัตยกรรม & UI", q: "โฟลว์การทำงานที่ผู้ใช้ต้องมีปฏิสัมพันธ์ (User Interaction Flows) มีอะไรบ้าง และฟังก์ชันไหนทำงาน?",
+    short: "มี 6 โฟลว์หลัก: คลิกโหนด (BFS Trace), สลับโหมด 1-Step/Full, ส่องซอร์สโค้ด (Side Drawer), ค้นหาโหนด (Ctrl+K แพนกล้อง), แชร์ลิงก์ (URLSearchParams), และกรองบทบาทไฟล์",
+    deep: "หลังจากระบบวิเคราะห์และเรนเดอร์กราฟเสร็จสิ้น ทุกการกระทำของผู้ใช้บนหน้าจอจะถูกผูกเข้ากับฟังก์ชันเฉพาะทางที่ทำงานแบบ In-Memory ทันทีโดยไม่ต้องโหลดหน้าเว็บใหม่",
+    bullets: [
+      "🖱️ 1. โฟลว์คลิกเลือกโหนด & สืบย้อนสายสัมพันธ์ (Node Selection & BFS Trace Flow):\n  • เมื่อผู้ใช้คลิกโหนดบน Canvas ➔ ฟังก์ชัน onNodeClick ส่งไอดีเข้า handleSelectNode ใน FlowExplorer.tsx\n  • เรียก computeTracePath(selectedNodeId, edges, traceMode) ใน FlowCanvas.tsx\n  • ทำงานด้วยอัลกอริทึม Breadth-First Search (BFS) พร้อม visitedNodes Set ป้องกัน Infinite Loop ท่องหาทั้ง upstream (ขาเข้า) และ downstream (ขาออก) ครบทั้งสาย\n  • toRfNodes() ปรับสไตล์: โหนดที่เลือก = เรืองแสง Glow, โหนดในสาย = ขอบฟ้าชัดเจน, โหนดนอกสาย = หรี่แสง (Dimmed เหลือ Opacity 0.25)\n  • toRfEdges() เปิดแอนิเมชันเส้นประวิ่ง (animated: true) บนเส้นที่เชื่อมโยง",
+      "🔀 2. โฟลว์สลับโหมด Trace (1-Step vs Full Trace Mode Toggle):\n  • ผู้ใช้กดปุ่มสลับ '1 ก้าว (Direct)' หรือ 'ทั้งสาย (Full Trace)' บนแถบเครื่องมือ\n  • State traceMode เปลี่ยน ➔ สั่ง re-compute computeTracePath ทันทีในหน่วยความจำ (0ms Latency)",
+      "🔍 3. โฟลว์กดดูซอร์สโค้ด & เปิด Side Drawer (Inspect & Code Viewer Flow):\n  • ผู้ใช้กดปุ่ม 'ดูโค้ด' (Inspect) บนแถบรายละเอียดโหนด หรือดับเบิลคลิกโหนด\n  • FlowExplorer.tsx เช็คว่ามีโค้ดในไฟล์ contentMap หรือไม่ หากไม่มีจะดึงสดจาก buildGitHubRawUrl\n  • ส่งเนื้อหาให้ SideDrawer.tsx ➔ เรียก highlightCodeWithPrism ใน code-viewer.ts\n  • formatCodeSnippet ตัดทอนที่ 300 บรรทัดป้องกัน DOM หนัก และ escapeHtml ป้องกันช่องโหว่ XSS\n  • ผู้ใช้สามารถกดปุ่ม Copy Code หรือกดคีย์บอร์ด Escape เพื่อปิดหน้าต่าง Drawer ได้ทันที",
+      "🎯 4. โฟลว์ค้นหาโหนด & เลื่อนมุมกล้อง (Node Search & Camera Pan / Zoom):\n  • ผู้ใช้กด Ctrl + K หรือ / บนคีย์บอร์ด ➔ เปิดกล่องค้นหาโหนด พิมพ์ชื่อไฟล์หรือประเภท\n  • เมื่อกดเลือกผลลัพธ์ ➔ สั่ง reactFlowInstance.setCenter(x, y, { zoom: 1.2, duration: 800 }) แพนมุมกล้องไปยังกล่องเป้าหมายอย่างนุ่มนวล พร้อมเลือกโหนดนั้นให้อัตโนมัติ",
+      "🔗 5. โฟลว์แชร์ผังผ่าน URL (Share State & URL Hydration Flow):\n  • ผู้ใช้กดปุ่ม 'แชร์ผัง' ➔ ฟังก์ชัน handleShare เรียก encodeShareableState(url, activeNode) ใน ui-helper.ts\n  • สร้างพารามิเตอร์ Query String คลีน เช่น ?url=...&node=... และบันทึกลง Clipboard\n  • เมื่อผู้อื่นเปิดลิงก์ ➔ decodeShareableState สกัด URL และโหนดออกมา แล้วสั่งวิเคราะห์และกระโดดไปหาโหนดนั้นอัตโนมัติ",
+      "🏷️ 6. โฟลว์กรองบทบาทไฟล์ (File Type Filtering Tabs):\n  • ผู้ใช้คลิกชิปตัวกรอง ALL / PAGE / COMPONENT / ACTION / STORE บนแถบ Dashboard\n  • useMemo ใน FlowExplorer.tsx กรอง displayedNodes และ displayedEdges แบบเรียลไทม์ ซ่อนโหนดที่ไม่เกี่ยวข้องออกจากสายตาทันที"
+    ],
+    libs: [
+      { name: "@xyflow/react (React Flow)", why: "ควบคุมมุมมอง Pan, Zoom, Highlight และ Event การคลิกโหนดได้อย่างมีประสิทธิภาพ", trade: "ต้องจัดการ Node/Edge State และ Memoization อย่างระมัดระวัง" },
+      { name: "PrismJS", why: "ทำ Syntax Highlighting โค้ดใน Side Drawer ได้สวยงามและรวดเร็ว", trade: "ต้องโหลด Grammar สำหรับภาษา TypeScript/TSX เพิ่มเติม" }
+    ],
+    extend: ["เพิ่ม Minimap Click-to-Jump ให้คลิกบนแผนที่ย่อแล้วเลื่อนกล้องทันที", "รองรับ Multi-Node Selection (Shift + Click) เพื่อเปรียบเทียบ 2 โหนดพร้อมกัน"]
+  },
+  {
     id: "scope", cat: "การแบ่งงาน", q: "ทำไมคนที่ 6 ได้แค่ 2 ไฟล์ แต่เป็นคนถือทั้งระบบ?",
     short: "เพราะ 2 ไฟล์นั้นคือ 'สัญญาระหว่างทีม' — จุดที่ของคนอื่นเข้ามาและออกไป",
     deep: "route.ts คือ boundary ที่รับอินพุตจากฝั่ง UI และแปลงเป็นผลลัพธ์กลับ ส่วน pipeline.ts คือ orchestrator ที่กำหนดลำดับว่าใครทำอะไรก่อนหลัง ถ้าแยกย้อยกลับไป ทุกคนต้องตัดสินใจเรื่อง cache, error message และรูปแบบผลลัพธ์เอง → จะได้ของไม่ตรงกัน",

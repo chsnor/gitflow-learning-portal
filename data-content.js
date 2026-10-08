@@ -340,7 +340,7 @@ const SIM_STEPS = [
     actor: "คน 1 + คน 6",
     color: "#3fb950",
     title: "7. ดึงผังไฟล์จาก GitHub Tree API ตรวจสอบ Token 401 & Fallback 2 ชั้น",
-    fileRef: "pipeline.ts:299-373, 481 · github.ts:44-60",
+    fileRef: "pipeline.ts:230-281, 370 · github.ts:44-60",
     detail: `
       <div class="sim-detail-content">
         <div class="sim-detail-block">
@@ -350,14 +350,43 @@ const SIM_STEPS = [
         <div class="sim-detail-block">
           <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
           <ul>
-            <li><strong>github.ts บรรทัดที่ 44–49:</strong> <code>buildGitHubApiUrl</code> ประกอบ endpoint <code>/repos/{owner}/{repo}/git/trees/{branch}?recursive=1</code></li>
-            <li><strong>github.ts บรรทัดที่ 51–60:</strong> <code>buildGitHubHeaders</code> แนบ User-Agent และ <code>Authorization: Bearer</code> เมื่อมี Token</li>
-            <li><strong>pipeline.ts บรรทัดที่ 348–350:</strong> ตรวจจับ <code>response.status === 401</code> โยน Error ชัดเจน '❌ GitHub Token ไม่ถูกต้อง (401 Bad credentials)'</li>
-            <li><strong>pipeline.ts บรรทัดที่ 351–356:</strong> ตรวจจับ 403 Rate Limit และ 404 Not Found</li>
-            <li><strong>pipeline.ts บรรทัดที่ 323–333:</strong> Fallback ชั้นที่ 1 — ถ้า branch main ติด 404 จะสลับไปลอง master อัตโนมัติ</li>
-            <li><strong>pipeline.ts บรรทัดที่ 335–360:</strong> Fallback ชั้นที่ 2 — ถ้ายัง 404 จะยิงถาม Repo API เพื่อดึง <code>default_branch</code> ตัวจริง</li>
-            <li><strong>pipeline.ts บรรทัดที่ 481:</strong> รับ <code>{ treeData, activeBranch }</code> เตรียมส่งต่อไปคัดกรอง</li>
+            <li><strong>github.ts บรรทัดที่ 44–49:</strong> <code>buildGitHubApiUrl</code> ประกอบ endpoint <code>https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1</code></li>
+            <li><strong>github.ts บรรทัดที่ 51–60:</strong> <code>buildGitHubHeaders</code> แนบ <code>User-Agent: GitFlow-Visualizer</code> และ <code>Authorization: Bearer</code> เมื่อมี Token</li>
+            <li><strong>pipeline.ts บรรทัดที่ 256–258:</strong> ตรวจจับ <code>response.status === 401</code> โยน Error ชัดเจน '❌ GitHub Token ไม่ถูกต้อง (401 Bad credentials)'</li>
+            <li><strong>pipeline.ts บรรทัดที่ 262–264:</strong> ตรวจจับ 403 Rate Limit และแนะนำให้แนบ Personal Access Token</li>
+            <li><strong>pipeline.ts บรรทัดที่ 244–253:</strong> Fallback สำรอง — ถ้า branch main ติด 404 จะสลับไปลอง branch master ให้อัตโนมัติทันที</li>
+            <li><strong>pipeline.ts บรรทัดที่ 268–273:</strong> แกะ JSON อ่าน <code>json.tree</code> ส่งต่อเป็น <code>treeData</code></li>
           </ul>
+        </div>
+        <div class="sim-detail-block" style="background:var(--color-panel); border:1px solid var(--color-line); border-radius:8px; padding:12px; margin-top:8px;">
+          <strong class="block-label" style="color:var(--color-accent); font-size:12px;">📡 เจาะลึกโปรโตคอล: สิ่งที่เราส่งไป ⇄ สิ่งที่ GitHub API ส่งกลับมา:</strong>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:6px; font-size:11.5px;">
+            <div style="background:var(--color-deep); padding:8px 10px; border-radius:6px; border-left:3px solid #38bdf8;">
+              <strong style="color:#38bdf8; display:block; margin-bottom:4px;">📤 เราส่งอะไรไป (Client Request):</strong>
+              • <strong>Method:</strong> <code>GET</code><br>
+              • <strong>Endpoint:</strong> <code>api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1</code><br>
+              • <strong>Query:</strong> <code>?recursive=1</code> (ดึงผังทะลุทุกโฟลเดอร์ใน 1 คำขอ)<br>
+              • <strong>Headers:</strong><br>
+              &nbsp;&nbsp;- <code>User-Agent: GitFlow-Visualizer</code> (GitHub บังคับ)<br>
+              &nbsp;&nbsp;- <code>Authorization: Bearer &lt;token&gt;</code> (ปลดล็อก 60 ➔ 5,000 req/ชม.)<br>
+              &nbsp;&nbsp;- <code>Accept: application/vnd.github.v3+json</code>
+            </div>
+            <div style="background:var(--color-deep); padding:8px 10px; border-radius:6px; border-left:3px solid #4ade80;">
+              <strong style="color:#4ade80; display:block; margin-bottom:4px;">📥 GitHub ส่งอะไรกลับมา (API Response):</strong>
+              • <strong>Status:</strong> <code>200 OK</code> (401=Token ผิด, 404=ไม่พบ, 403=Rate Limit)<br>
+              • <strong>JSON Structure:</strong><br>
+              <code>{ "sha": "...", "truncated": false, "tree": [ ... ] }</code><br>
+              • <strong>โครงสร้างใน tree แต่ละรายการ:</strong><br>
+              &nbsp;&nbsp;- <code>path</code>: ที่อยู่ไฟล์เต็ม เช่น <code>src/app/page.tsx</code><br>
+              &nbsp;&nbsp;- <code>type</code>: <code>"blob"</code> (ไฟล์จริง) หรือ <code>"tree"</code> (โฟลเดอร์)<br>
+              &nbsp;&nbsp;- <code>mode</code>: <code>100644</code> (สิทธิ์ไฟล์ใน Git)<br>
+              &nbsp;&nbsp;- <code>size</code>: ขนาดไฟล์ (ไบต์)<br>
+              <em>*หมายเหตุ: ได้เฉพาะสารบัญผังไฟล์ ยังไม่มีเนื้อหาโค้ดข้างใน!</em>
+            </div>
+          </div>
+          <div style="margin-top:8px; font-size:11px; color:var(--color-ink-dim); line-height:1.5;">
+            ⚡ <strong>การดึงเนื้อหาโค้ดดิบต่อ (Raw CDN Fetch):</strong> นำเฉพาะ 45 ไฟล์แรกไปยิง <code>https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}</code> พร้อมกันด้วย <code>Promise.all</code> เพื่อได้เนื้อหาโค้ด (Plain Text) มาสแกนหา import ต่อไป
+          </div>
         </div>
         <div class="sim-detail-block">
           <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; Error Guard:</strong>
@@ -514,30 +543,31 @@ const SIM_STEPS = [
     actor: "คน 3 (FlowCanvas)",
     color: "#d29922",
     title: "12. [On-Demand ก] คลิกโหนดเพื่อสืบย้อนความสัมพันธ์ด้วย BFS ทั้งสาย (Trace Flow)",
-    fileRef: "FlowCanvas.tsx:48-119, 348-350",
+    fileRef: "FlowCanvas.tsx:49-100, 348-350",
     detail: `
       <div class="sim-detail-content">
         <div class="sim-detail-block">
           <strong class="block-label">🎯 หน้าที่ / วัตถุประสงค์:</strong>
-          ใช้อัลกอริทึม Breadth-First Search (BFS) เพื่อค้นหาโหนดต้นทาง (Ancestors) และปลายทาง (Descendants) ทั้งหมดที่เชื่อมโยงกับโหนดที่คลิก
+          ใช้อัลกอริทึม Breadth-First Search (BFS) เพื่อค้นหาโหนดต้นทาง (Ancestors) และปลายทาง (Descendants) ทั้งหมดที่เชื่อมโยงกับโหนดที่คลิก รองรับทั้งโหมด 1-Step และ Full Trace
         </div>
         <div class="sim-detail-block">
           <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
           <ul>
-            <li><strong>FlowCanvas.tsx บรรทัดที่ 48–54:</strong> <code>computeTracePath</code> รับ selectedNodeId, edges, traceMode ('all' หรือ '1-step')</li>
-            <li><strong>FlowCanvas.tsx บรรทัดที่ 55–66:</strong> โหมด 1-Step: วนลูปหาเฉพาะโหนดที่เชื่อมติดกันโดยตรง</li>
-            <li><strong>FlowCanvas.tsx บรรทัดที่ 68–118:</strong> โหมดทั้งสาย (All Steps):
-              - สร้าง adjacency list: outgoingMap (ทิศทางไปข้างหน้า) และ incomingMap (ทิศทางย้อนกลับ)<br>
-              - BFS ขาลง (Descendants): ใช้ Queue และ visited Set วิ่งสืบหาลูกหลานทั้งหมดจนสุดสาย<br>
-              - BFS ขาขึ้น (Ancestors): ใช้ Queue และ visited Set วิ่งสืบหาบรรพบุรุษต้นทางจนสุดสาย</li>
-            <li><strong>FlowCanvas.tsx บรรทัดที่ 119:</strong> ส่งคืน <code>{ highlightedNodeIds, highlightedEdgeIds }</code></li>
-            <li>โหนดที่ไม่อยู่ในสายจะถูกปรับความโปร่งแสงลดลงเหลือ <code>opacity: 0.35</code></li>
-            <li><strong>FlowCanvas.tsx บรรทัดที่ 348–350:</strong> <code>handleClearFocus</code> ล้างสถานะเมื่อกด Esc หรือคลิกพื้นที่ว่าง</li>
+            <li><strong>FlowCanvas.tsx บรรทัดที่ 49–56:</strong> <code>computeTracePath(selectedNodeId, edges, traceMode)</code> ตรวจสอบค่าว่าง หากไม่มีโหนดคืนค่าว่างทันที</li>
+            <li><strong>FlowCanvas.tsx บรรทัดที่ 61–71:</strong> <strong>โหมด 1-Step (Direct):</strong> วนลูปหาเฉพาะโหนดและเส้นที่แตะ <code>selectedNodeId</code> โดยตรงระยะ 1 ก้าว</li>
+            <li><strong>FlowCanvas.tsx บรรทัดที่ 73–98:</strong> <strong>โหมดทั้งสาย (Full Trace):</strong>
+              - เริ่มต้น Queue: <code>queue = [selectedNodeId]</code> และ <code>visitedNodes = new Set([selectedNodeId])</code><br>
+              - วนลูป Queue BFS ดึงหัวคิว <code>const current = queue.shift()!</code><br>
+              - เดินตามน้ำ (Downstream): <code>edge.source === current</code> ถ้ายังไม่เคยแวะเพิ่มลงใน visitedNodes และ push เข้าคิว<br>
+              - เดินทวนน้ำ (Upstream): <code>edge.target === current</code> ถ้ายังไม่เคยแวะเพิ่มลงใน visitedNodes และ push เข้าคิว</li>
+            <li><strong>FlowCanvas.tsx บรรทัดที่ 99:</strong> ส่งคืน <code>{ connectedNodeIds: visitedNodes, connectedEdgeIds }</code></li>
+            <li><strong>FlowCanvas.tsx บรรทัดที่ 105–218:</strong> <code>toRfNodes</code> เรืองแสงโหนดที่เลือก (Glow), ไฮไลต์โหนดในสาย, และหรี่แสงโหนดนอกสาย (Dimmed เหลือ Opacity 0.25)</li>
+            <li><strong>FlowCanvas.tsx บรรทัดที่ 348–350:</strong> <code>handleClearFocus</code> ล้างสถานะไฮไลต์เมื่อกด Esc หรือคลิกพื้นที่ว่าง</li>
           </ul>
         </div>
         <div class="sim-detail-block">
           <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; Error Guard:</strong>
-          ป้องกัน Circular Dependency Loop ด้วยการใช้ Set ตรวจสอบ visited ก่อน push เข้า Queue เสมอ
+          ป้องกันปัญหา Circular Dependency Loop ด้วย Visited Set คอยดักจับโหนดที่เคยสำรวจไปแล้ว ทำให้การท่อง BFS จบได้อย่างปลอดภัย 100%
         </div>
         <div class="sim-detail-block">
           <strong class="block-label">📦 ผลลัพธ์ส่งต่อ:</strong>
@@ -550,7 +580,7 @@ const SIM_STEPS = [
     actor: "คน 4 + คน 5 (SideDrawer & CodeViewer)",
     color: "#f472b6",
     title: "13. [On-Demand ข] กด Inspect ซอร์สโค้ด ไฮไลต์ Prism และเปิด Side Drawer",
-    fileRef: "FlowExplorer.tsx:43-96 · code-viewer.ts:28-110 · SideDrawer.tsx:26-181",
+    fileRef: "FlowExplorer.tsx:43-85 · code-viewer.ts:28-102 · SideDrawer.tsx:21-90",
     detail: `
       <div class="sim-detail-content">
         <div class="sim-detail-block">
@@ -560,14 +590,13 @@ const SIM_STEPS = [
         <div class="sim-detail-block">
           <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
           <ul>
-            <li><strong>FlowCanvas.tsx บรรทัดที่ 312–318:</strong> <code>handleInspect</code> ส่ง Event พร้อมชื่อและประเภทไฟล์กลับไปหา FlowExplorer</li>
-            <li><strong>FlowExplorer.tsx บรรทัดที่ 60–61:</strong> เรียก <code>buildGitHubRawUrl</code> และ <code>buildGitHubBlobUrl</code> จาก <code>github.ts</code></li>
-            <li><strong>FlowExplorer.tsx บรรทัดที่ 73–87:</strong> ยิง <code>fetch(rawUrl)</code> ดาวน์โหลดโค้ดจริงและเปิด drawerState</li>
-            <li><strong>code-viewer.ts บรรทัดที่ 28–46:</strong> <code>getLanguageFromPath</code> ตรวจนามสกุลเพื่อแมปกับภาษาของ Prism</li>
-            <li><strong>code-viewer.ts บรรทัดที่ 53–73:</strong> <code>formatCodeSnippet</code> ตัดทอนโค้ดเหลือ 300 บรรทัดแรก เพื่อป้องกัน DOM โตเกินไป</li>
-            <li><strong>code-viewer.ts บรรทัดที่ 81–85:</strong> <code>escapeHtml</code> แปลงอักขระพิเศษเพื่อป้องกันช่องโหว่ XSS</li>
-            <li><strong>code-viewer.ts บรรทัดที่ 91–110:</strong> <code>highlightCodeWithPrism</code> แปลงโค้ดเป็น HTML ที่มีสีสันสวยงาม</li>
-            <li><strong>SideDrawer.tsx บรรทัดที่ 39–48:</strong> ดักจับปุ่ม Escape เพื่อปิดหน้าต่าง, ปุ่ม Copy Code คัดลอกโค้ดเต็ม, และปุ่ม 'ดูโค้ดทั้งหมด'</li>
+            <li><strong>FlowCanvas.tsx บรรทัดที่ 312:</strong> ผู้ใช้กดปุ่ม 'ดูโค้ด' (Inspect) หรือดับเบิลคลิกโหนดบน Canvas</li>
+            <li><strong>FlowExplorer.tsx บรรทัดที่ 43–85:</strong> <code>handleSelectNode</code> ตรวจสอบแคชโค้ด หากไม่มีจะสั่งดาวน์โหลดสดผ่าน <code>buildGitHubRawUrl(owner, repo, path, branch)</code></li>
+            <li><strong>code-viewer.ts บรรทัดที่ 28–46:</strong> <code>getLanguageFromPath</code> ตรวจนามสกุลเพื่อแมปกับภาษาของ Prism (.tsx/.ts ➔ typescript)</li>
+            <li><strong>code-viewer.ts บรรทัดที่ 51–73:</strong> <code>formatCodeSnippet</code> ตัดทอนโค้ดเหลือ 300 บรรทัดแรก เพื่อป้องกัน DOM บวม</li>
+            <li><strong>code-viewer.ts บรรทัดที่ 79–85:</strong> <code>escapeHtml</code> แปลงอักขระพิเศษ (&lt;, &gt;, &quot;) ป้องกันช่องโหว่ XSS</li>
+            <li><strong>code-viewer.ts บรรทัดที่ 89–102:</strong> <code>highlightCodeWithPrism</code> แปลงโค้ดเป็น HTML พร้อมแท็กคลาสสีไวยากรณ์</li>
+            <li><strong>SideDrawer.tsx บรรทัดที่ 37–59:</strong> ดักจับคีย์บอร์ด <code>Escape</code> เพื่อปิด Drawer และมีปุ่ม <code>handleCopy</code> คัดลอกโค้ดเต็ม</li>
           </ul>
         </div>
         <div class="sim-detail-block">
@@ -584,8 +613,8 @@ const SIM_STEPS = [
     n: 14,
     actor: "คน 4 + คน 3",
     color: "#58a6ff",
-    title: "14. [On-Demand ค] ค้นหาโหนด (Ctrl+K) เลื่อนมุมกล้อง & แชร์สถานะด้วย Base64 URL",
-    fileRef: "FlowCanvas.tsx:353-376 · ui-helper.ts:63-119 · FlowExplorer.tsx:153-166",
+    title: "14. [On-Demand ค] ค้นหาโหนด (Ctrl+K) เลื่อนมุมกล้อง & แชร์สถานะด้วย URL SearchParams",
+    fileRef: "FlowCanvas.tsx:353-376 · ui-helper.ts:41-77 · FlowExplorer.tsx:144-150",
     detail: `
       <div class="sim-detail-content">
         <div class="sim-detail-block">
@@ -596,18 +625,49 @@ const SIM_STEPS = [
           <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
           <ul>
             <li><strong>FlowCanvas.tsx บรรทัดที่ 353–376:</strong> <code>focusAndPanToNode</code> เมื่อเลือกโหนดจากกล่องค้นหา (Ctrl+K หรือ /) จะสั่ง <code>setCenter(x, y, { zoom: 1.2, duration: 800 })</code> เพื่อแพนกล้องอย่างนุ่มนวล</li>
-            <li><strong>ui-helper.ts บรรทัดที่ 63–82:</strong> <code>encodeShareableState</code> แปลง URL และ ID ของโหนดที่โฟกัสเป็น JSON แล้วเข้ารหัสเป็น Base64 แปะท้ายลิงก์ <code>?state=&lt;base64&gt;</code> แล้วคัดลอกลง Clipboard</li>
-            <li><strong>ui-helper.ts บรรทัดที่ 87–119:</strong> <code>decodeShareableState</code> เมื่อเปิดลิงก์ที่มีพารามิเตอร์ state ระบบจะถอดรหัส Base64 อย่างปลอดภัยด้วย try-catch หากข้อมูลผิดรูปจะคืน null ไม่ให้ระบบพัง</li>
-            <li><strong>FlowExplorer.tsx บรรทัดที่ 153–166:</strong> อ่านพารามิเตอร์ state ตอนเปิดหน้าเว็บ และสั่งรันการวิเคราะห์อัตโนมัติผ่าน queueMicrotask</li>
+            <li><strong>ui-helper.ts บรรทัดที่ 41–47:</strong> <code>encodeShareableState</code> ใช้ <code>URLSearchParams</code> ประกอบพารามิเตอร์คลีน <code>?url=...&node=...</code> แล้วคัดลอกลง Clipboard</li>
+            <li><strong>ui-helper.ts บรรทัดที่ 52–77:</strong> <code>decodeShareableState</code> รองรับทั้ง URL Query String มาตรฐานและ Base64 ยุคเก่าอย่างปลอดภัยด้วย try-catch</li>
+            <li><strong>FlowExplorer.tsx บรรทัดที่ 144–150:</strong> <code>handleShare</code> สั่งคัดลอกลิงก์และแสดงกล่องข้อความแจ้งเตือน "คัดลอกลิงก์สำเร็จ"</li>
           </ul>
         </div>
         <div class="sim-detail-block">
           <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; Error Guard:</strong>
-          ป้องกัน State Injection และ Malformed State Crashing ด้วยการ Wrap ใน Safe Try-Catch เสมอ
+          ป้องกัน Malformed State Crashing ด้วย Safe Parsing ไม่ทำให้หน้าเว็บแครชแม้ผู้ใช้แก้ไข URL ด้วยตนเอง
         </div>
         <div class="sim-detail-block">
           <strong class="block-label">📦 ผลลัพธ์ส่งต่อ:</strong>
           ผู้ใช้คนอื่นสามารถเปิดลิงก์และเห็นมุมมองผังกราฟเดียวกันได้ทันที 100%
+        </div>
+      </div>`
+  },
+  {
+    n: 15,
+    actor: "คน 4 (FlowExplorer)",
+    color: "#bc8cff",
+    title: "15. [On-Demand ง] กรองแสดงผลตามบทบาทไฟล์ & จัดการโหนดบนผืนผ้าใบ (Filter Tabs)",
+    fileRef: "FlowExplorer.tsx:200-240, 382-415",
+    detail: `
+      <div class="sim-detail-content">
+        <div class="sim-detail-block">
+          <strong class="block-label">🎯 หน้าที่ / วัตถุประสงค์:</strong>
+          กรองผังไดอะแกรมตามบทบาทไฟล์ในสถาปัตยกรรม (ALL, PAGE, COMPONENT, ACTION, STORE) เพื่อลดความซับซ้อนของแผนผังขนาดใหญ่
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🔍 การทำงานทีละบรรทัด (อ้างอิงโค้ดจริง 100%):</strong>
+          <ul>
+            <li><strong>FlowExplorer.tsx บรรทัดที่ 382–415:</strong> ผู้ใช้คลิกชิปตัวกรองประเภทไฟล์บนแถบควบคุม Dashboard</li>
+            <li><strong>FlowExplorer.tsx บรรทัดที่ 200–240:</strong> <code>useMemo</code> ทำการคำนวณ <code>displayedNodes</code> และ <code>displayedEdges</code> ใหม่ทันที</li>
+            <li>โหนดที่ไม่ตรงกับประเภทที่เลือกจะถูกซ่อนออกจากผืนผ้าใบอย่างราบรื่น</li>
+            <li>เส้นความสัมพันธ์ (Edges) ที่ชี้ไปยังโหนดที่ถูกซ่อนจะถูกตัดออกชั่วคราว เพื่อไม่ให้มีเส้นลอยเคว้ง</li>
+          </ul>
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">🛡️ กลไกความปลอดภัย &amp; ประสิทธิภาพ:</strong>
+          ใช้ React <code>useMemo</code> ป้องกันการคำนวณซ้ำซ้อน ทำให้การสลับฟิลเตอร์ตอบสนองได้ทันที (0ms Latency)
+        </div>
+        <div class="sim-detail-block">
+          <strong class="block-label">📦 ผลลัพธ์ส่งต่อ:</strong>
+          ผู้ใช้งานสามารถโฟกัสเจาะลึกเฉพาะส่วนของระบบ เช่น ดูเฉพาะ Server Actions หรือดูเฉพาะ Pages ได้อย่างง่ายดาย
         </div>
       </div>`
   }
@@ -714,7 +774,14 @@ const SIM_JUMPS = [
     file: "flowcanvas", line: 353,
     snippets: [
       { file: "flowcanvas", line: 353, start: 353, end: 376, note: "focusAndPanToNode — ค้นหาโหนดด่วน (Ctrl+K) และสั่ง setCenter แพนกล้อง" },
-      { file: "uihelper", line: 129, start: 63, end: 119, note: "encodeShareableState & decodeShareableState — จัดการ Base64 State URL" }
+      { file: "uihelper", line: 41, start: 41, end: 77, note: "encodeShareableState & decodeShareableState — จัดการ URLSearchParams" }
+    ]
+  },
+  {
+    file: "flowexplorer", line: 382,
+    snippets: [
+      { file: "flowexplorer", line: 382, start: 380, end: 415, note: "Filter Tabs — แถบปุ่มชิปกรองประเภทไฟล์ ALL / PAGE / COMPONENT / ACTION / STORE" },
+      { file: "flowexplorer", line: 200, start: 200, end: 240, note: "useMemo — คำนวณ displayedNodes และ displayedEdges กรองโหนดตามหมวดหมู่" }
     ]
   }
 ];
