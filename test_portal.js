@@ -309,6 +309,47 @@ test('8.3 สเต็ปที่ 12-15 ครอบคลุมการโต
 });
 
 // ----------------------------------------------------
+// หมวด 9: คลังโพยตอบอาจารย์ยอดฮิต (QNA_ITEMS 27 ข้อ)
+// ----------------------------------------------------
+console.log('\n🎯 หมวด 9: ตรวจสอบคลังโพยตอบอาจารย์ (Defense Q&A Cheatsheet)');
+
+const qnaScope = evaluateScript('data-content.js', ['QNA_ITEMS', 'QNA_JUMPS']);
+const qnaItems = qnaScope.QNA_ITEMS;
+const qnaJumps = qnaScope.QNA_JUMPS;
+
+test('9.1 คลังโพยมีคำถามตอบอาจารย์ครบถ้วนอย่างน้อย 25 ข้อ (ปัจจุบัน 27 ข้อ)', () => {
+  assert(Array.isArray(qnaItems), 'QNA_ITEMS ไม่ใช่อาร์เรย์');
+  assert(qnaItems.length >= 25, `จำนวนข้อคำถามน้อยกว่าเกณฑ์ (${qnaItems.length}/25)`);
+});
+
+test('9.2 ทุกข้อคำถามมีหมวดหมู่ (cat), คำถาม (q), และคำตอบ (a) ครบถ้วน', () => {
+  qnaItems.forEach((x, i) => {
+    assert(x.cat, `ข้อ ${i + 1} ไม่มีหมวดหมู่ (cat)`);
+    assert(x.q && x.q.length > 5, `ข้อ ${i + 1} คำถามสั้นเกินไป: ${x.q}`);
+    assert(x.a && x.a.length > 15, `ข้อ ${i + 1} คำตอบสั้นเกินไป: ${x.a}`);
+  });
+});
+
+test('9.3 หมวดหมู่ครอบคลุมประเด็นสำคัญทั้ง 7 หมวดตรงตามพฤติกรรมอาจารย์', () => {
+  const cats = new Set(qnaItems.map(x => x.cat));
+  assert(cats.has('📡 ข้อมูล & API'), 'ขาดหมวด ข้อมูล & API');
+  assert(cats.has('💾 การเก็บข้อมูล & แคช'), 'ขาดหมวด การเก็บข้อมูล & แคช');
+  assert(cats.has('🔐 สิทธิ์ & สมาชิก'), 'ขาดหมวด สิทธิ์ & สมาชิก');
+  assert(cats.has('🖱️ การใช้งาน & โต้ตอบ'), 'ขาดหมวด การใช้งาน & โต้ตอบ');
+  assert(cats.has('🛡️ การรับมือ Error'), 'ขาดหมวด การรับมือ Error');
+  assert(cats.has('🏛️ สถาปัตยกรรม'), 'ขาดหมวด สถาปัตยกรรม');
+  assert(cats.has('👥 บทบาทในกลุ่ม'), 'ขาดหมวด บทบาทในกลุ่ม');
+});
+
+test('9.4 จำนวนจุดกระโดดส่องโค้ด (QNA_JUMPS) ตรงกับจำนวนข้อคำถาม 1:1', () => {
+  assert(Array.isArray(qnaJumps), 'QNA_JUMPS ไม่ใช่อาร์เรย์');
+  assert(qnaJumps.length === qnaItems.length, `ความยาว QNA_JUMPS (${qnaJumps.length}) ไม่ตรงกับ QNA_ITEMS (${qnaItems.length})`);
+  qnaJumps.forEach((j, i) => {
+    assert(j.file && j.line > 0, `จุดกระโดดข้อ ${i + 1} ไม่ถูกต้อง: ${JSON.stringify(j)}`);
+  });
+});
+
+// ----------------------------------------------------
 // สรุปผลการทดสอบ
 // ----------------------------------------------------
 console.log('\n================================================================');

@@ -1420,6 +1420,20 @@ window.renderPitchView = renderPitchView;
 
 // ===== Defense Q&A + Self-Test Quiz =====
 const quizAnswers = {};
+let qnaSearchQuery = "";
+let qnaSelectedCat = "all";
+
+function filterQna(query, cat) {
+  if (query !== undefined) qnaSearchQuery = query.toLowerCase().trim();
+  if (cat !== undefined) qnaSelectedCat = cat;
+  renderQuizView();
+}
+window.filterQna = filterQna;
+
+function toggleAllQna(open) {
+  document.querySelectorAll(".qna-item").forEach((d) => (d.open = open));
+}
+window.toggleAllQna = toggleAllQna;
 
 function quizPick(qi, oi) {
   quizAnswers[qi] = oi;
@@ -1439,20 +1453,70 @@ function renderQuizView() {
   const answered = Object.keys(quizAnswers).length;
   const correct = QUIZ_QUESTIONS.reduce((acc, q, qi) => acc + (quizAnswers[qi] === q.answer ? 1 : 0), 0);
 
+  const categories = ["all", ...new Set(QNA_ITEMS.map((x) => x.cat || "ทั่วไป"))];
+  const indexedQna = QNA_ITEMS.map((x, i) => ({ ...x, _origIndex: i }));
+  const filteredQna = indexedQna.filter((x) => {
+    const matchCat = qnaSelectedCat === "all" || (x.cat || "ทั่วไป") === qnaSelectedCat;
+    const matchQuery =
+      !qnaSearchQuery ||
+      x.q.toLowerCase().includes(qnaSearchQuery) ||
+      x.a.toLowerCase().includes(qnaSearchQuery) ||
+      (x.cat && x.cat.toLowerCase().includes(qnaSearchQuery));
+    return matchCat && matchQuery;
+  });
+
   const qnaHtml = `
-    <h3 style="font-size:14px; margin:0 0 2px;">สคริปต์ตอบคำถามยอดฮิต (Defense Q&A) — กดแต่ละข้อเพื่อดูเฉลย</h3>
-    ${QNA_ITEMS.map((x, i) => `
-      <details class="qna-item">
-        <summary><span class="qna-num">Q${i + 1}</span> ${x.q}</summary>
-        <div class="qna-answer">
-          <button type="button" class="nav-btn" style="font-size:11px; padding:3px 10px; margin-bottom:8px;" onclick="qnaJumpToCode(${i})" title="เด้งไปดูโค้ดจริงที่ใช้ตอบ">ดูโค้ดจริง →</button>
-          <div>${x.a}</div>
-        </div>
-      </details>`).join("")}`;
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:4px;">
+      <div>
+        <h3 style="font-size:15px; margin:0; font-weight:700; color:var(--color-ink);">🎯 คลังโพยตอบอาจารย์ยอดฮิต (${QNA_ITEMS.length} ข้อเจาะลึก 7 หมวด)</h3>
+        <p style="font-size:12px; color:var(--color-ink-dim); margin:2px 0 0;">คัดสรรจากแนวคำถามจริงของอาจารย์ พร้อมสคริปต์พูดและปุ่มส่องโค้ดจริงรายบรรทัด</p>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button type="button" class="nav-btn" onclick="toggleAllQna(true)" style="font-size:11px; padding:3px 10px;">เปิดทั้งหมด</button>
+        <button type="button" class="nav-btn" onclick="toggleAllQna(false)" style="font-size:11px; padding:3px 10px;">ปิดทั้งหมด</button>
+      </div>
+    </div>
+
+    <!-- แถบค้นหาและตัวกรองหมวดหมู่ -->
+    <div style="display:flex; flex-direction:column; gap:8px; margin:10px 0 16px; background:var(--color-deep); padding:10px; border-radius:10px; border:1px solid var(--color-line-soft);">
+      <div style="display:flex; gap:8px; align-items:center;">
+        <input type="search" placeholder="🔍 ค้นหาคำถามหรือคีย์เวิร์ด (เช่น ข้อมูลมาจากไหน, เก็บที่ไหน, Token, Dagre, In-Memory)..." value="${esc(qnaSearchQuery)}" oninput="filterQna(this.value, undefined)" style="flex:1; padding:7px 12px; background:var(--color-panel); border:1px solid var(--color-line); border-radius:8px; color:var(--color-ink); font-size:12px; outline:none;">
+        <span style="font-size:11.5px; color:var(--color-ink-dim); white-space:nowrap;">พบ ${filteredQna.length} ข้อ</span>
+      </div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap;">
+        ${categories.map((c) => {
+          const isActive = qnaSelectedCat === c;
+          const label = c === "all" ? `ทั้งหมด (${QNA_ITEMS.length})` : c;
+          return `<button type="button" onclick="filterQna(undefined, '${c}')" style="font-size:11px; padding:3px 10px; border-radius:999px; border:1px solid ${isActive ? "var(--color-accent)" : "var(--color-line)"}; background:${isActive ? "oklch(76% 0.13 235 / 0.18)" : "var(--color-panel)"}; color:${isActive ? "var(--color-accent)" : "var(--color-ink-dim)"}; cursor:pointer; font-weight:${isActive ? "600" : "400"};">${esc(label)}</button>`;
+        }).join("")}
+      </div>
+    </div>
+
+    ${filteredQna.length === 0 ? `<div style="padding:24px; text-align:center; color:var(--color-ink-faint); font-size:13px;">ไม่พบคำถามที่ตรงกับ '${esc(qnaSearchQuery)}' — ลองค้นหาด้วยคำอื่น</div>` : ""}
+
+    <div style="display:grid; gap:8px;">
+      ${filteredQna.map((x) => `
+        <details class="qna-item">
+          <summary style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <span class="qna-num">Q${x._origIndex + 1}</span>
+            <span class="badge badge-neutral" style="font-size:10.5px; padding:2px 8px;">${esc(x.cat || "ทั่วไป")}</span>
+            <span style="font-weight:600; color:var(--color-ink); flex:1;">${esc(x.q)}</span>
+          </summary>
+          <div class="qna-answer" style="margin-top:8px; padding-top:8px; border-top:1px dashed var(--color-line-soft);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+              <span style="font-size:11px; color:var(--color-accent); font-weight:600;">💬 แนวทางการตอบอาจารย์:</span>
+              <button type="button" class="nav-btn peek-jump-btn" style="font-size:11px; padding:3px 10px;" onclick="qnaJumpToCode(${x._origIndex})" title="เด้งไปดูโค้ดจริงที่ใช้ตอบ">
+                ส่องตำแหน่งโค้ดจริง →
+              </button>
+            </div>
+            <div style="font-size:12.5px; line-height:1.65; color:var(--color-ink);">${esc(x.a)}</div>
+          </div>
+        </details>`).join("")}
+    </div>`;
 
   const quizHtml = `
-    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin:18px 0 2px;">
-      <h3 style="font-size:14px; margin:0;">แบบทดสอบตรวจความพร้อมก่อนพรีเซนต์ (${QUIZ_QUESTIONS.length} ข้อ)</h3>
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin:24px 0 6px;">
+      <h3 style="font-size:14px; margin:0; font-weight:700;">แบบทดสอบตรวจความพร้อมก่อนพรีเซนต์ (${QUIZ_QUESTIONS.length} ข้อ)</h3>
       <div style="display:flex; gap:8px; align-items:center;">
         <span class="badge badge-blue">ตอบแล้ว ${answered}/${QUIZ_QUESTIONS.length}</span>
         <span class="badge badge-green">ถูกต้อง ${correct}/${QUIZ_QUESTIONS.length}</span>

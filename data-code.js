@@ -1745,8 +1745,6 @@ function toRfNodes(
   });
 }
 
-const CRITICAL_ARCHITECTURAL_LABELS = new Set(['routes to', 'renders', 'server action', 'triggers', 'submits to', 'uses store']);
-
 /**
  * Transform domain edge models into styled React Flow edge definitions.
  */
@@ -1758,17 +1756,8 @@ function toRfEdges(
   return (items ?? []).map((item) => {
     const isConnected = selectedNodeId ? connectedEdgeIds.has(item.id) : true;
 
-    // โหมด Smart เสมอ: แสดงป้ายชื่อเฉพาะสายสัมพันธ์หลัก หรือโหนดที่ถูกเลือก
-    let displayLabel: string | undefined = undefined;
-    if (selectedNodeId) {
-      if (isConnected) {
-        displayLabel = item.label;
-      }
-    } else {
-      if (item.label && CRITICAL_ARCHITECTURAL_LABELS.has(item.label.toLowerCase())) {
-        displayLabel = item.label;
-      }
-    }
+    // แสดงป้ายกำกับเส้นเฉพาะเมื่อมีการคลิกเลือกโหนดที่เชื่อมโยงเท่านั้น (ไม่ให้ป้ายลอยค้างตอนยังไม่ได้เลือก)
+    const displayLabel = selectedNodeId && isConnected ? item.label : undefined;
 
     const strokeColor = item.style?.stroke || '#737373';
     const isHighlighted = selectedNodeId && isConnected;
