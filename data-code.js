@@ -5,7 +5,7 @@
 
 const RAW_PIPELINE = `import crypto from 'crypto';
 import { parseGitHubUrl, buildGitHubApiUrl, buildGitHubHeaders } from './github';
-import { filterTreeFiles, detectNextFileType, extractImportsFromCode, extractActionTriggers } from './parser';
+import { filterTreeFiles, detectNextFileType, extractImportsFromCode } from './parser';
 import { buildFlowElements } from './generator';
 import { AnalysisResult, GitHubTreeItem, CodeRelation, NextFileType, FlowNodeItem, FlowEdgeItem } from '../types';
 
@@ -19,7 +19,10 @@ function computeCacheKey(githubUrl: string, token?: string): string {
 }
 
 const MAX_CACHE_ENTRIES = 50;
-const CACHE_TTL_MS = 60 * 60 * 1000;
+const CACHE_TTL_MS = 15 * 60 * 1000; // 15-minute TTL to balance fresh updates and rate limit protection
+const MAX_FILTERED_FILES = 500;
+const MAX_RAW_FETCH_FILES = 45;
+const FETCH_TIMEOUT_MS = 4000;
 
 interface CacheItem {
   result: AnalysisResult;
@@ -43,7 +46,11 @@ class BoundedLRUCache {
 
     this.cache.delete(key);
     this.cache.set(key, item);
-    return item.result;
+    return {
+      ...item.result,
+      isCached: true,
+      cachedAt: item.timestamp,
+    };
   }
 
   set(key: string, result: AnalysisResult): void {
@@ -242,18 +249,11 @@ export function inferStructuralRelations(
   for (const item of otherFiles) {
     const itemName = item.path.split('/').pop()?.replace(/\\.[^.]+$/, '').toLowerCase() || '';
 
-    let matchedPage = allPages.find((p) => {
-      const segments = p.path.toLowerCase().split('/').filter((s) => s && s !== 'src' && s !== 'app' && !s.startsWith('page.'));
-      return segments.some((seg) => {
-        const cleanSeg = seg.replace(/[[\\]]/g, '');
-        const stem = cleanSeg.endsWith('s') && cleanSeg.length > 3 ? cleanSeg.slice(0, -1) : cleanSeg;
-        return (stem.length >= 3 && itemName.includes(stem)) || (cleanSeg.length >= 3 && itemName.includes(cleanSeg));
-      });
-    });
-
-    if (!matchedPage) {
-      matchedPage = rootEntry || allPages[0];
-    }
+    // Match component to route page by directory name or associate with root entry
+    const matchedPage = allPages.find((p) => {
+      const pageDir = p.path.toLowerCase().split('/').slice(0, -1).pop() || '';
+      return pageDir && pageDir !== 'app' && pageDir !== 'src' && itemName.includes(pageDir);
+    }) || rootEntry || allPages[0];
 
     if (matchedPage) {
       addRelation({
@@ -281,20 +281,6 @@ export function inferStructuralRelations(
     }
   }
 
-  if (relations.length === 0 && files.length > 1) {
-    const anchor = rootEntry || files[0];
-    for (let i = 1; i < Math.min(files.length, 10); i++) {
-      if (anchor.path !== files[i].path) {
-        addRelation({
-          source: anchor.path,
-          target: files[i].path,
-          type: 'import',
-          label: 'references',
-        });
-      }
-    }
-  }
-
   return relations;
 }
 
@@ -306,7 +292,7 @@ async function fetchGitHubTree(
   repo: string,
   initialBranch: string,
   token?: string
-): Promise<{ treeData: GitHubTreeItem[]; activeBranch: string }> {
+): Promise<{ treeData: GitHubTreeItem[]; activeBranch: string; treeSha?: string }> {
   let activeBranch = initialBranch;
 
   try {
@@ -366,6 +352,7 @@ async function fetchGitHubTree(
     return {
       treeData: Array.isArray(json.tree) ? json.tree : [],
       activeBranch,
+      treeSha: typeof json.sha === 'string' ? json.sha : undefined,
     };
   } catch (error: unknown) {
     const err = error as { message?: string };
@@ -416,23 +403,6 @@ function extractRelationsFromContent(
         }
       }
     } catch {}
-
-    try {
-      const rawActions = extractActionTriggers(filePath, content);
-      for (const act of rawActions) {
-        const target = resolveImportToFilePath(act.target, filePath, allPaths) || act.target;
-        const key = \`\${filePath}->\${target}:\${act.label}\`;
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          relations.push({
-            source: filePath,
-            target,
-            type: act.type,
-            label: act.label,
-          });
-        }
-      }
-    } catch {}
   }
 
   return relations;
@@ -449,21 +419,9 @@ export async function runAnalysisPipeline(
 ): Promise<AnalysisResult> {
   const startTime = performance.now();
 
-  let parsed = null;
-  try {
-    parsed = parseGitHubUrl(githubUrl);
-  } catch {
-    if (githubUrl && githubUrl.includes('github.com')) {
-      const parts = githubUrl.replace(/\\.git$/, '').replace(/\\/+$/, '').split('/');
-      parsed = {
-        owner: parts[parts.length - 2],
-        repo: parts[parts.length - 1],
-      };
-    }
-  }
-
+  const parsed = parseGitHubUrl(githubUrl);
   if (!parsed || !parsed.owner || !parsed.repo) {
-    throw new Error('URL ต้องมาจาก github.com เท่านั้น');
+    throw new Error('URL ต้องมาจาก github.com เท่านั้น (เช่น https://github.com/owner/repo)');
   }
 
   const { owner, repo } = parsed;
@@ -480,55 +438,39 @@ export async function runAnalysisPipeline(
   }
 
   let treeData: GitHubTreeItem[] = [];
+  let treeSha: string | undefined = undefined;
   if (mockTreeData) {
     treeData = mockTreeData;
   } else {
     const fetched = await fetchGitHubTree(owner, repo, activeBranch, effectiveToken);
     treeData = fetched.treeData;
     activeBranch = fetched.activeBranch;
+    treeSha = fetched.treeSha;
   }
 
-  let filteredItems: GitHubTreeItem[] = [];
-  try {
-    filteredItems = filterTreeFiles(treeData, 500);
-  } catch {
-    filteredItems = treeData.filter(
-      (item) =>
-        item.type === 'blob' &&
-        !item.path.includes('node_modules') &&
-        !item.path.includes('.next') &&
-        !item.path.endsWith('.d.ts') &&
-        /\\.(tsx?|jsx?)$/.test(item.path)
-    ).slice(0, 500);
-  }
+  // 1. Filter code files using centralized parser logic
+  const filteredItems = filterTreeFiles(treeData, MAX_FILTERED_FILES);
 
-  const filesWithTypes = filteredItems.map((item) => {
-    let fileType: NextFileType = 'other';
-    try {
-      fileType = detectNextFileType(item.path);
-    } catch {
-      if (item.path.includes('page.')) fileType = 'page';
-      else if (item.path.includes('actions')) fileType = 'action';
-      else if (item.path.includes('middleware') || item.path.includes('proxy')) fileType = 'middleware';
-      else if (item.path.includes('store') || item.path.includes('context')) fileType = 'store';
-      else if (item.path.includes('components/')) fileType = 'component';
-    }
-    return { path: item.path, fileType };
-  });
+  // 2. Classify file roles using centralized detection
+  const filesWithTypes = filteredItems.map((item) => ({
+    path: item.path,
+    fileType: detectNextFileType(item.path),
+  }));
 
   const allPaths = filesWithTypes.map((f) => f.path);
   let relations: CodeRelation[] = [];
   let filesContentToProcess: Record<string, string> | null = mockFilesContent || null;
 
+  // 3. Fetch content for priority candidate files within timeout and quota limits
   if (!filesContentToProcess && !mockTreeData && filesWithTypes.length > 0) {
     try {
-      const candidates = filesWithTypes.slice(0, 45);
+      const candidates = filesWithTypes.slice(0, MAX_RAW_FETCH_FILES);
       const fetchPromises = candidates.map(async (f) => {
         try {
           const rawUrl = \`https://raw.githubusercontent.com/\${owner}/\${repo}/\${activeBranch}/\${f.path}\`;
           const headers: Record<string, string> = {};
           if (effectiveToken) headers['Authorization'] = \`Bearer \${effectiveToken}\`;
-          const res = await fetch(rawUrl, { headers, signal: AbortSignal.timeout(4000) });
+          const res = await fetch(rawUrl, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
           return res.ok ? { path: f.path, text: await res.text() } : { path: f.path, text: '' };
         } catch {
           return { path: f.path, text: '' };
@@ -548,47 +490,31 @@ export async function runAnalysisPipeline(
     } catch {}
   }
 
+  // 4. Extract explicit import & action relations from actual code
   if (filesContentToProcess) {
     relations = extractRelationsFromContent(filesContentToProcess, filesWithTypes, allPaths);
   }
 
+  // 5. Fallback to App Router structural conventions if no file content relations found
   if (relations.length === 0 && filesWithTypes.length > 0) {
     relations.push(...inferStructuralRelations(filesWithTypes));
   }
 
-  let flowElements: { nodes: FlowNodeItem[]; edges: FlowEdgeItem[] };
-  try {
-    flowElements = buildFlowElements(filesWithTypes, relations);
-  } catch {
-    flowElements = {
-      nodes: filesWithTypes.map((f, idx) => ({
-        id: f.path.replace(/[^a-zA-Z0-9]/g, '_'),
-        label: f.path,
-        fileType: f.fileType,
-        path: f.path,
-        position: { x: (idx % 3) * 220, y: Math.floor(idx / 3) * 120 },
-      })),
-      edges: relations.map((r, idx) => ({
-        id: \`e-\${idx}\`,
-        source: r.source.replace(/[^a-zA-Z0-9]/g, '_'),
-        target: r.target.replace(/[^a-zA-Z0-9]/g, '_'),
-        label: r.label,
-        animated: r.type === 'action',
-      })),
-    };
-  }
+  // 6. Compute visual layout and flow nodes/edges
+  const flowElements = buildFlowElements(filesWithTypes, relations);
 
   const finalResult: AnalysisResult = {
     repoName: repo,
     owner,
     branch: activeBranch,
+    commitSha: treeSha,
     totalFiles: treeData.length,
     filteredFilesCount: filteredItems.length,
     relations,
     nodes: flowElements.nodes,
     edges: flowElements.edges,
-    mermaidSyntax: '',
     isCached: false,
+    cachedAt: Date.now(),
     executionTimeMs: performance.now() - startTime,
   };
 
@@ -685,12 +611,6 @@ const ALLOWED_ROOT_FILES = new Set([
 
 const VALID_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'];
 
-const RESERVED_IDENTIFIERS = new Set([
-  'async', 'await', 'return', 'function', 'true', 'false',
-  'null', 'undefined', 'e', 'event', 'evt', 'formData',
-  'console', 'log', 'preventDefault', 'stopPropagation', 'void'
-]);
-
 const COMPONENT_FOLDER_REGEX = /(^|\\/)_?(components?|ui|widgets?|views?)\\//i;
 const ACTION_FOLDER_REGEX = /(^|\\/)actions?\\//i;
 const STORE_FOLDER_REGEX = /(^|\\/)(stores?|contexts?|state)\\//i;
@@ -698,7 +618,7 @@ const HOOK_FOLDER_REGEX = /(^|\\/)hooks?\\//i;
 const API_FOLDER_REGEX = /(^|\\/)api\\//i;
 const PAGES_ROUTER_REGEX = /(^|\\/)pages\\//i;
 
-const STORE_FILE_REGEX = /(?:[A-Z]tore|[-_.]stores?|^stores?)\\.(tsx?|jsx?)$/;
+const STORE_FILE_REGEX = /(?:[a-zA-Z0-9]*[Ss]tore|[-_.]stores?|^stores?)\\.(tsx?|jsx?)$/;
 const HOOK_FILE_REGEX = /^use[A-Z][\\w-]*\\.(tsx?|jsx?)$/;
 
 /**
@@ -819,85 +739,7 @@ export function extractImportsFromCode(sourcePath: string, codeContent: string):
 
   return relations;
 }
-
-/**
- * Extract function name identifier from a JavaScript/JSX expression.
- */
-function extractTargetFunction(expression: string): string | null {
-  const tokens = expression
-    .replace(/['"\`]/g, '')
-    .split(/[^a-zA-Z0-9_$]+/)
-    .filter(Boolean);
-
-  for (const token of tokens) {
-    if (!RESERVED_IDENTIFIERS.has(token) && !/^\\d+$/.test(token)) {
-      return token;
-    }
-  }
-
-  return null;
-}
-
-/**
- * Extract onClick event triggers and form server action relations from source code.
- */
-export function extractActionTriggers(sourcePath: string, codeContent: string): CodeRelation[] {
-  if (
-    !codeContent ||
-    typeof codeContent !== 'string' ||
-    (!codeContent.includes('onClick') && !codeContent.includes('action'))
-  ) {
-    return [];
-  }
-
-  const cleanCode = codeContent.replace(/\\/\\*[\\s\\S]*?\\*\\/|\\/\\/.*/g, '');
-  const relations: CodeRelation[] = [];
-  const seenKeys = new Set<string>();
-
-  if (cleanCode.includes('onClick')) {
-    const onClickRegex = /onClick=\\{([^}]+)\\}/g;
-    let match: RegExpExecArray | null;
-
-    while ((match = onClickRegex.exec(cleanCode)) !== null) {
-      const targetFn = extractTargetFunction(match[1]);
-      if (!targetFn) continue;
-
-      const key = \`\${sourcePath}->\${targetFn}:onClick\`;
-      if (!seenKeys.has(key)) {
-        seenKeys.add(key);
-        relations.push({
-          source: sourcePath,
-          target: targetFn,
-          type: 'event',
-          label: 'onClick',
-        });
-      }
-    }
-  }
-
-  if (cleanCode.includes('action')) {
-    const actionRegex = /(?:form\\s+)?action=\\{([^}]+)\\}/g;
-    let match: RegExpExecArray | null;
-
-    while ((match = actionRegex.exec(cleanCode)) !== null) {
-      const targetFn = extractTargetFunction(match[1]);
-      if (!targetFn) continue;
-
-      const key = \`\${sourcePath}->\${targetFn}:form action\`;
-      if (!seenKeys.has(key)) {
-        seenKeys.add(key);
-        relations.push({
-          source: sourcePath,
-          target: targetFn,
-          type: 'action',
-          label: 'form action',
-        });
-      }
-    }
-  }
-
-  return relations;
-}`;
+`;
 
 const RAW_GENERATOR = `import dagre from '@dagrejs/dagre';
 import { CodeRelation, NextFileType, FlowNodeItem, FlowEdgeItem } from '../types';
@@ -1045,8 +887,7 @@ export function buildFlowElements(
   return { nodes, edges };
 }`;
 
-const RAW_PAGE = `import React from 'react';
-import { GitFork } from 'lucide-react';
+const RAW_PAGE = `import { GitFork } from 'lucide-react';
 import { FlowExplorer } from '@/components/FlowExplorer';
 
 export default function HomePage() {
@@ -1405,7 +1246,7 @@ export function FlowExplorer() {
                   <span>กำลังวิเคราะห์...</span>
                 </>
               ) : (
-                <span>วิเคราะห์สถาปัตยกรรม →</span>
+                <span>สร้าง Flowchart →</span>
               )}
             </button>
           </div>
@@ -1619,41 +1460,19 @@ export function FlowExplorer() {
 }
 `;
 
-const RAW_UIHELPER = `/**
- * Validate GitHub URL structure, domain integrity, and prevent malicious scripts.
+const RAW_UIHELPER = `import { parseGitHubUrl } from './github';
+
+/**
+ * Validate GitHub URL structure using centralized GitHub parser.
  */
 export function validateUrlInput(input: string): { isValid: boolean; errorMessage: string | null } {
   if (!input || !input.trim()) {
     return { isValid: false, errorMessage: 'กรุณากรอก GitHub URL' };
   }
 
-  const trimmed = input.trim();
-  const lowerInput = trimmed.toLowerCase();
-
-  let hostname = '';
-  try {
-    const candidate = /^https?:\\/\\//i.test(trimmed) ? trimmed : \`https://\${trimmed}\`;
-    hostname = new URL(candidate).hostname.toLowerCase();
-  } catch {
-    hostname = '';
-  }
-
-  const containsXss = lowerInput.includes('<script') || 
-                      lowerInput.includes('javascript:') || 
-                      (lowerInput.includes('<') && lowerInput.includes('>'));
-
-  if (containsXss) {
-    return { isValid: false, errorMessage: 'URL ต้องมาจาก github.com เท่านั้น' };
-  }
-
-  if (hostname !== 'github.com' && hostname !== 'www.github.com') {
-    return { isValid: false, errorMessage: 'URL ต้องมาจาก github.com เท่านั้น' };
-  }
-
-  const urlWithoutDomain = trimmed.replace(/^https?:\\/\\/(www\\.)?github\\.com\\/?/i, '').replace(/\\.git$/i, '').replace(/\\/+$/, '');
-  const segments = urlWithoutDomain.split('/').filter(Boolean);
-  if (segments.length < 2) {
-    return { isValid: false, errorMessage: 'URL ต้องระบุทั้งชื่อเจ้าของและคลังโค้ด (เช่น https://github.com/owner/repo)' };
+  const parsed = parseGitHubUrl(input.trim());
+  if (!parsed || !parsed.owner || !parsed.repo) {
+    return { isValid: false, errorMessage: 'URL ต้องมาจาก github.com และระบุเจ้าของกับคลังโค้ด (เช่น https://github.com/owner/repo)' };
   }
 
   return { isValid: true, errorMessage: null };
@@ -2042,10 +1861,10 @@ function toRfNodes(
       data: { label: nodeLabel, path: item.path, fileType: item.fileType },
       style: {
         border: isSelected
-          ? '1.5px solid #ffffff'
+          ? \`2px solid \${colors.border}\`
           : isConnected && selectedNodeId
-          ? '1px solid #737373'
-          : '1px solid #262626',
+          ? \`1.5px solid \${colors.border}99\`
+          : \`1px solid \${colors.border}45\`,
         background: '#0a0a0a',
         color: '#ededed',
         borderRadius: 6,
@@ -2055,7 +1874,7 @@ function toRfNodes(
         opacity,
         transition: 'all 0.15s ease',
         boxShadow: isSelected
-          ? '0 0 0 1px #ffffff, 0 8px 30px rgba(255, 255, 255, 0.12)'
+          ? \`0 0 0 1px \${colors.border}, 0 8px 28px \${colors.border}35\`
           : '0 2px 8px rgba(0, 0, 0, 0.8)',
       },
     };
@@ -2549,6 +2368,7 @@ const RAW_SIDEDRAWER = `'use client';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { X, ExternalLink, Copy, Check, Loader2 } from 'lucide-react';
 import { getLanguageFromPath, formatCodeSnippet, highlightCodeWithPrism } from '@/lib/code-viewer';
+import 'prismjs/themes/prism-tomorrow.css';
 
 export interface SideDrawerProps {
   isOpen: boolean;
@@ -2709,8 +2529,8 @@ export function SideDrawer({
               <span className="text-xs">กำลังโหลดซอร์สโค้ดจาก GitHub...</span>
             </div>
           ) : rawCode ? (
-            <pre className="m-0 overflow-x-auto">
-              <code className={\`language-\${language}\`} dangerouslySetInnerHTML={{ __html: highlightedHtml || formattedCode }} />
+            <pre className={\`language-\${language} m-0 overflow-x-auto !bg-transparent !p-0\`}>
+              <code className={\`language-\${language} !bg-transparent font-mono\`} dangerouslySetInnerHTML={{ __html: highlightedHtml || formattedCode }} />
             </pre>
           ) : (
             <div className="flex h-full items-center justify-center text-slate-500 text-xs">
@@ -2818,8 +2638,10 @@ export interface AnalysisResult {
   relations: CodeRelation[];
   nodes: FlowNodeItem[];
   edges: FlowEdgeItem[];
-  mermaidSyntax: string;
+  mermaidSyntax?: string;
   isCached?: boolean;
+  cachedAt?: number;
+  commitSha?: string;
   executionTimeMs?: number;
 }
 
@@ -2886,6 +2708,59 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #404040;
+}
+
+/* Prism Syntax Highlighting (High-contrast Developer Dark Theme) */
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: #71717a !important;
+  font-style: italic;
+}
+
+.token.punctuation {
+  color: #a1a1aa !important;
+}
+
+.token.property,
+.token.tag,
+.token.boolean,
+.token.number,
+.token.constant,
+.token.symbol {
+  color: #fb923c !important;
+}
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin {
+  color: #4ade80 !important;
+}
+
+.token.operator,
+.token.entity,
+.token.url {
+  color: #38bdf8 !important;
+}
+
+.token.atrule,
+.token.attr-value,
+.token.keyword {
+  color: #c084fc !important;
+}
+
+.token.function,
+.token.class-name {
+  color: #60a5fa !important;
+}
+
+.token.regex,
+.token.important,
+.token.variable {
+  color: #f43f5e !important;
 }
 `;
 
@@ -3379,7 +3254,7 @@ const RAW_GITHUB = `import { ParsedGitHubUrl } from '../types';
 function parseBranchFromSegments(segments: string[]): string | undefined {
   const markerIndex = segments.findIndex((seg) => seg === 'tree' || seg === 'blob');
   if (markerIndex === -1 || markerIndex + 1 >= segments.length) return undefined;
-  return segments[markerIndex + 1] || undefined;
+  return segments.slice(markerIndex + 1).join('/') || undefined;
 }
 
 /**
@@ -3436,15 +3311,7 @@ export function buildGitHubHeaders(token?: string): Record<string, string> {
 /**
  * Build raw content URL for retrieving file source from GitHub.
  */
-export function buildGitHubRawUrl(owner: string, repo: string, filePathOrBranch: string, branchOrPath = 'main'): string {
-  let filePath = filePathOrBranch;
-  let branch = branchOrPath;
-
-  if (/\\.[a-zA-Z0-9]+$/.test(branchOrPath) && !/\\.[a-zA-Z0-9]+$/.test(filePathOrBranch)) {
-    branch = filePathOrBranch;
-    filePath = branchOrPath;
-  }
-
+export function buildGitHubRawUrl(owner: string, repo: string, filePath: string, branch = 'main'): string {
   const cleanPath = filePath.replace(/^\\/+/, '');
   return \`https://raw.githubusercontent.com/\${owner}/\${repo}/\${branch}/\${cleanPath}\`;
 }
