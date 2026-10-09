@@ -12,14 +12,10 @@ const MAX_FILTERED_FILES = 500;
 const MAX_RAW_FETCH_FILES = 45;
 const FETCH_TIMEOUT_MS = 4000;
 
-// Simple in-memory cache to prevent redundant GitHub requests
 const pipelineCache = new Map<string, AnalysisResult>();
 
 const COMMON_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.jsx', '/index.ts', '/index.tsx', '/index.js'];
 
-/**
- * Resolve alias imports (@/ or ~/) against repository file paths.
- */
 function resolveAliasImport(rawTarget: string, allFilePaths: string[]): string | null {
   const clean = rawTarget.slice(2);
   for (const prefix of ['src/', '']) {
@@ -32,13 +28,10 @@ function resolveAliasImport(rawTarget: string, allFilePaths: string[]): string |
   return null;
 }
 
-/**
- * Resolve relative import targets (./ or ../) relative to source file directory.
- */
 function resolveRelativeImport(cleanTarget: string, sourcePath: string, allFilePaths: string[]): string | null {
   const sourceDir = sourcePath.includes('/') ? sourcePath.slice(0, sourcePath.lastIndexOf('/')) : '';
   const parts = sourceDir ? sourceDir.split('/') : [];
-  
+
   for (const seg of cleanTarget.split('/')) {
     if (seg === '.' || !seg) continue;
     if (seg === '..') parts.pop();
@@ -54,9 +47,6 @@ function resolveRelativeImport(cleanTarget: string, sourcePath: string, allFileP
   return null;
 }
 
-/**
- * Map import target specifiers to concrete file paths within the repository.
- */
 function resolveImportToFilePath(
   importTarget: string,
   sourcePath: string,
@@ -84,9 +74,6 @@ function resolveImportToFilePath(
   return null;
 }
 
-/**
- * Infer structural graph relations based on Next.js App Router conventions.
- */
 function inferStructuralRelations(
   files: Array<{ path: string; fileType: NextFileType }>
 ): CodeRelation[] {
@@ -194,7 +181,6 @@ function inferStructuralRelations(
   for (const item of otherFiles) {
     const itemName = item.path.split('/').pop()?.replace(/\\.[^.]+$/, '').toLowerCase() || '';
 
-    // Match component to route page by directory name or associate with root entry
     const matchedPage = allPages.find((p) => {
       const pageDir = p.path.toLowerCase().split('/').slice(0, -1).pop() || '';
       return pageDir && pageDir !== 'app' && pageDir !== 'src' && itemName.includes(pageDir);
@@ -229,9 +215,6 @@ function inferStructuralRelations(
   return relations;
 }
 
-/**
- * Fetch repository tree structure from GitHub API with automatic branch detection.
- */
 async function fetchGitHubTree(
   owner: string,
   repo: string,
@@ -285,9 +268,6 @@ async function fetchGitHubTree(
   }
 }
 
-/**
- * Extract imports and action triggers from fetched raw file contents.
- */
 function extractRelationsFromContent(
   filesContent: Record<string, string>,
   filesWithTypes: Array<{ path: string; fileType: NextFileType }>,
@@ -330,9 +310,6 @@ function extractRelationsFromContent(
   return relations;
 }
 
-/**
- * Primary orchestration pipeline: ingest repository, classify files, infer relations, and generate flow elements.
- */
 export async function runAnalysisPipeline(
   githubUrl: string,
   token?: string,
@@ -371,10 +348,8 @@ export async function runAnalysisPipeline(
     treeSha = fetched.treeSha;
   }
 
-  // 1. Filter code files using centralized parser logic
   const filteredItems = filterTreeFiles(treeData, MAX_FILTERED_FILES);
 
-  // 2. Classify file roles using centralized detection
   const filesWithTypes = filteredItems.map((item) => ({
     path: item.path,
     fileType: detectNextFileType(item.path),
@@ -384,7 +359,6 @@ export async function runAnalysisPipeline(
   let relations: CodeRelation[] = [];
   let filesContentToProcess: Record<string, string> | null = mockFilesContent || null;
 
-  // 3. Fetch content for priority candidate files within timeout and quota limits
   if (!filesContentToProcess && !mockTreeData && filesWithTypes.length > 0) {
     try {
       const candidates = filesWithTypes.slice(0, MAX_RAW_FETCH_FILES);
@@ -413,17 +387,14 @@ export async function runAnalysisPipeline(
     } catch {}
   }
 
-  // 4. Extract explicit import & action relations from actual code
   if (filesContentToProcess) {
     relations = extractRelationsFromContent(filesContentToProcess, filesWithTypes, allPaths);
   }
 
-  // 5. Fallback to App Router structural conventions if no file content relations found
   if (relations.length === 0 && filesWithTypes.length > 0) {
     relations.push(...inferStructuralRelations(filesWithTypes));
   }
 
-  // 6. Compute visual layout and flow nodes/edges
   const flowElements = buildFlowElements(filesWithTypes, relations);
 
   const finalResult: AnalysisResult = {
@@ -444,14 +415,12 @@ export async function runAnalysisPipeline(
   pipelineCache.set(cacheKey, finalResult);
   return finalResult;
 }
+
 `;
 
 const RAW_ROUTE = `import { NextRequest, NextResponse } from "next/server";
 import { runAnalysisPipeline } from "../../../lib/pipeline";
 
-/**
- * Handle repository analysis request and dispatch orchestration pipeline.
- */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     const body = await req.json();
@@ -487,6 +456,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 }
+
 `;
 
 const RAW_PARSER = `import { GitHubTreeItem, CodeRelation, NextFileType } from '../types';
@@ -555,9 +525,6 @@ const PAGES_ROUTER_REGEX = /(^|\\/)pages\\//i;
 const STORE_FILE_REGEX = /(?:[a-zA-Z0-9]*[Ss]tore|[-_.]stores?|^stores?)\\.(tsx?|jsx?)$/;
 const HOOK_FILE_REGEX = /^use[A-Z][\\w-]*\\.(tsx?|jsx?)$/;
 
-/**
- * Check whether a repository path should be ignored during tree filtering.
- */
 function shouldIgnorePath(lowerPath: string, fileName: string, isRootFile: boolean): boolean {
   if (fileName.startsWith('.')) return true;
   if (BLACKLIST_FILES.has(fileName)) return true;
@@ -580,9 +547,6 @@ function shouldIgnorePath(lowerPath: string, fileName: string, isRootFile: boole
   return false;
 }
 
-/**
- * Filter Git tree items to keep only actionable Next.js source code files up to maxLimit.
- */
 export function filterTreeFiles(items: GitHubTreeItem[], maxLimit = 250): GitHubTreeItem[] {
   if (!Array.isArray(items)) return [];
 
@@ -608,9 +572,6 @@ export function filterTreeFiles(items: GitHubTreeItem[], maxLimit = 250): GitHub
   return filtered;
 }
 
-/**
- * Detect Next.js architectural file type (page, layout, api, action, store, hook, component).
- */
 export function detectNextFileType(filePath: string): NextFileType {
   if (!filePath || typeof filePath !== 'string') return 'other';
 
@@ -644,9 +605,6 @@ export function detectNextFileType(filePath: string): NextFileType {
   return 'other';
 }
 
-/**
- * Extract internal project import relations from source code content.
- */
 export function extractImportsFromCode(sourcePath: string, codeContent: string): CodeRelation[] {
   if (!codeContent || typeof codeContent !== 'string' || !codeContent.includes('import')) {
     return [];
@@ -673,14 +631,12 @@ export function extractImportsFromCode(sourcePath: string, codeContent: string):
 
   return relations;
 }
+
 `;
 
 const RAW_GENERATOR = `import dagre from '@dagrejs/dagre';
 import { CodeRelation, NextFileType, FlowNodeItem, FlowEdgeItem } from '../types';
 
-/**
- * Sanitize file path into a safe, alphanumeric node identifier for React Flow.
- */
 function sanitizeNodeId(pathStr: string): string {
   const id = pathStr
     .replace(/[()]/g, '')
@@ -701,9 +657,6 @@ const COLOR_PALETTE: Record<string, { border: string; bg: string; text: string }
   other: { border: '#94a3b8', bg: '#0e1118', text: '#e2e8f0' },
 };
 
-/**
- * Retrieve border, background, and text colors corresponding to a Next.js file type.
- */
 export function getNodeColorConfig(fileType: NextFileType): { border: string; bg: string; text: string } {
   return COLOR_PALETTE[fileType] ?? COLOR_PALETTE.other;
 }
@@ -711,9 +664,6 @@ export function getNodeColorConfig(fileType: NextFileType): { border: string; bg
 const NODE_WIDTH = 260;
 const NODE_HEIGHT = 80;
 
-/**
- * Compute hierarchical layout coordinates using Dagre graph engine.
- */
 function applyDagreLayout(nodes: FlowNodeItem[], edges: FlowEdgeItem[], seenIds: Set<string>): void {
   try {
     const dagreGraph = new dagre.graphlib.Graph();
@@ -760,9 +710,6 @@ function applyDagreLayout(nodes: FlowNodeItem[], edges: FlowEdgeItem[], seenIds:
   }
 }
 
-/**
- * Transform classified source files and code relations into positioned nodes and edges.
- */
 export function buildFlowElements(
   files: Array<{ path: string; fileType: NextFileType }>,
   relations: CodeRelation[]
@@ -819,7 +766,8 @@ export function buildFlowElements(
   applyDagreLayout(nodes, edges, seenIds);
 
   return { nodes, edges };
-}`;
+}
+`;
 
 const RAW_PAGE = `import { GitFork } from 'lucide-react';
 import { FlowExplorer } from '@/components/FlowExplorer';
@@ -858,7 +806,8 @@ export default function HomePage() {
       <FlowExplorer />
     </main>
   );
-}`;
+}
+`;
 
 const RAW_FLOWEXPLORER = `'use client';
 
@@ -866,11 +815,11 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { AnalysisResult, NextFileType, SideDrawerState, FlowNodeItem } from '../types';
 import { FlowCanvas } from './FlowCanvas';
 import { SideDrawer } from './SideDrawer';
-import { 
-  validateUrlInput, 
-  formatRepoStats, 
-  encodeShareableState, 
-  decodeShareableState 
+import {
+  validateUrlInput,
+  formatRepoStats,
+  encodeShareableState,
+  decodeShareableState
 } from '../lib/ui-helper';
 import { buildGitHubRawUrl, buildGitHubBlobUrl } from '../lib/github';
 import { Share2, Check, Sparkles, AlertCircle, X } from 'lucide-react';
@@ -881,9 +830,6 @@ const SAMPLE_REPOSITORIES = [
   { label: 'Next.js Subscription', url: 'https://github.com/vercel/nextjs-subscription-payments' },
 ];
 
-/**
- * Main application dashboard and state orchestrator for analyzing repositories and visualizing flows.
- */
 export function FlowExplorer() {
   const [url, setUrl] = useState<string>('');
   const [token, setToken] = useState<string>('');
@@ -903,7 +849,7 @@ export function FlowExplorer() {
   });
 
   async function handleSelectNode(
-    filePath: string, 
+    filePath: string,
     fileType: NextFileType,
     owner = result?.owner,
     repo = result?.repoName,
@@ -944,7 +890,6 @@ export function FlowExplorer() {
     }
   }
 
-  // เรียก API หลังบ้านเพื่อวิเคราะห์คลังโค้ด
   const executeAnalysis = async (targetUrl: string, githubToken?: string, activeFilePath?: string | null) => {
     const validation = validateUrlInput(targetUrl);
     if (!validation.isValid) {
@@ -995,7 +940,7 @@ export function FlowExplorer() {
         void executeAnalysis(targetUrl, token, targetNode || undefined);
       }, 0);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -1091,16 +1036,15 @@ export function FlowExplorer() {
             </div>
           </div>
 
-          {/* แถบแจ้งเตือนข้อผิดพลาด สไตล์ Dark Minimalist & Precision Box */}
           {errorMessage && (
             <div className="flex items-start gap-2.5 px-3.5 py-2.5 rounded border border-rose-500/30 bg-rose-950/20 text-rose-300 text-xs font-mono animate-in fade-in slide-in-from-top-1 duration-200">
               <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
               <div className="flex-1 leading-relaxed text-[11px] sm:text-xs">
                 {errorMessage}
               </div>
-              <button 
-                type="button" 
-                onClick={() => setErrorMessage(null)} 
+              <button
+                type="button"
+                onClick={() => setErrorMessage(null)}
                 className="text-zinc-500 hover:text-zinc-300 p-0.5 transition cursor-pointer shrink-0"
                 aria-label="ปิดการแจ้งเตือน"
               >
@@ -1109,7 +1053,6 @@ export function FlowExplorer() {
             </div>
           )}
 
-          {/* Quick Sample Chips (สไตล์ Vercel Monochrome Chips) */}
           <div className="flex flex-wrap items-center gap-2 pt-0.5">
             <span className="text-[11px] font-mono text-zinc-500 flex items-center gap-1">
               <Sparkles className="w-3 h-3 text-zinc-400" />
@@ -1156,10 +1099,9 @@ export function FlowExplorer() {
         </form>
       </section>
 
-      {/* ส่วนแสดงผลสถิติและแผนผัง */}
       {result && (
         <section className="space-y-4 flex-1 flex flex-col">
-          {/* แถบสถานะทางวิศวกรรม */}
+
           <div className="bg-[#0a0a0a] border border-[#262626] rounded-lg px-5 py-3.5 flex flex-wrap items-center justify-between gap-4 shadow-xl">
             <div className="flex items-center gap-3">
               <span className="text-xs font-semibold text-white tracking-tight flex items-center gap-2">
@@ -1213,10 +1155,9 @@ export function FlowExplorer() {
             </div>
           </div>
 
-          {/* แถบกรองสถาปัตยกรรม สไตล์ Vercel Monochrome Tabs */}
           <div className="flex items-center gap-1.5 text-xs text-zinc-400 px-1 overflow-x-auto pb-1 font-mono">
             <span className="font-medium text-zinc-500 mr-1 hidden sm:inline text-[11px]">FILTER:</span>
-            
+
             <button
               type="button"
               onClick={() => setFilterType('all')}
@@ -1335,7 +1276,6 @@ export function FlowExplorer() {
             </button>
           </div>
 
-          {/* แคนวาสแผนผัง React Flow */}
           <div className="bg-[#000000] border border-[#262626] rounded-lg overflow-hidden h-[620px] relative shadow-2xl">
             <FlowCanvas
               nodes={displayedNodes}
@@ -1348,7 +1288,6 @@ export function FlowExplorer() {
         </section>
       )}
 
-      {/* แถบเลื่อนส่องโค้ด Side Drawer */}
       <SideDrawer
         isOpen={drawerState.isOpen}
         onClose={() => setDrawerState((prev) => ({ ...prev, isOpen: false }))}
@@ -1361,13 +1300,11 @@ export function FlowExplorer() {
     </div>
   );
 }
+
 `;
 
 const RAW_UIHELPER = `import { parseGitHubUrl } from './github';
 
-/**
- * Validate GitHub URL structure using centralized GitHub parser.
- */
 export function validateUrlInput(input: string): { isValid: boolean; errorMessage: string | null } {
   if (!input || !input.trim()) {
     return { isValid: false, errorMessage: 'กรุณากรอก GitHub URL' };
@@ -1381,9 +1318,6 @@ export function validateUrlInput(input: string): { isValid: boolean; errorMessag
   return { isValid: true, errorMessage: null };
 }
 
-/**
- * Format repository metrics for total, analyzed, and ignored files.
- */
 export function formatRepoStats(totalFiles: number, filteredFiles: number): {
   rawCount: number;
   analyzedCount: number;
@@ -1400,9 +1334,6 @@ export function formatRepoStats(totalFiles: number, filteredFiles: number): {
   };
 }
 
-/**
- * Encode current explorer state into clean URL query params.
- */
 export function encodeShareableState(url: string, activeNode?: string): string {
   if (!url) return '';
   const params = new URLSearchParams();
@@ -1411,14 +1342,11 @@ export function encodeShareableState(url: string, activeNode?: string): string {
   return params.toString();
 }
 
-/**
- * Decode shared state from URL query params (or legacy base64 string).
- */
 export function decodeShareableState(paramStr: string): { url: string; activeNode?: string } | null {
   if (!paramStr || typeof paramStr !== 'string') return null;
 
   try {
-    // 1. Try standard URL query string (e.g. "url=https...&node=...")
+
     if (paramStr.includes('url=')) {
       const params = new URLSearchParams(paramStr.startsWith('?') ? paramStr.slice(1) : paramStr);
       const url = params.get('url');
@@ -1430,7 +1358,6 @@ export function decodeShareableState(paramStr: string): { url: string; activeNod
       }
     }
 
-    // 2. Legacy base64 fallback
     const raw = typeof window !== 'undefined' ? window.atob(paramStr) : Buffer.from(paramStr, 'base64').toString('utf-8');
     const parsed = JSON.parse(decodeURIComponent(raw));
     if (parsed && typeof parsed.url === 'string') {
@@ -1439,7 +1366,8 @@ export function decodeShareableState(paramStr: string): { url: string; activeNod
   } catch {}
 
   return null;
-}`;
+}
+`;
 
 const RAW_CODEVIEWER = `import Prism from 'prismjs';
 import 'prismjs/components/prism-javascript';
@@ -1465,9 +1393,6 @@ const EXTENSION_LANGUAGE_MAP: Record<string, string> = {
   svg: 'markup',
 };
 
-/**
- * Resolve language identifier for Prism syntax highlighter from file extension.
- */
 export function getLanguageFromPath(filePath: string): string {
   if (!filePath || typeof filePath !== 'string') return 'clike';
 
@@ -1488,9 +1413,6 @@ export interface FormattedCodeResult {
   displayedLines: number;
 }
 
-/**
- * Limit and format raw source code lines to prevent DOM performance degradation.
- */
 export function formatCodeSnippet(rawCode: string, maxLines: number = 300): FormattedCodeResult {
   if (typeof rawCode !== 'string') {
     return {
@@ -1516,9 +1438,6 @@ export function formatCodeSnippet(rawCode: string, maxLines: number = 300): Form
   };
 }
 
-/**
- * Escape special HTML entities to prevent XSS in rendered code blocks.
- */
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
@@ -1526,9 +1445,6 @@ function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;');
 }
 
-/**
- * Highlight source code syntax safely using Prism with HTML entity fallback.
- */
 export function highlightCodeWithPrism(code: string, language: string): string {
   if (!code) return '';
 
@@ -1542,7 +1458,8 @@ export function highlightCodeWithPrism(code: string, language: string): string {
   } catch {
     return escapeHtml(code);
   }
-}`;
+}
+`;
 
 const RAW_FLOWCANVAS = `'use client';
 
@@ -1587,11 +1504,6 @@ const COLUMNS = 4;
 const COL_WIDTH = 320;
 const ROW_HEIGHT = 120;
 
-/**
- * คำนวณเส้นทางและโหนดที่เชื่อมโยงด้วย Breadth-First Search (BFS)
- * - direct: ตรวจเฉพาะเพื่อนบ้านระยะ 1 ก้าว
- * - full: ท่องหาความเชื่อมโยงครบทั้งสายงาน (BFS) พร้อม Visited Set ป้องกัน Infinite Loop
- */
 function computeTracePath(
   selectedNodeId: string | null,
   edges: FlowEdgeItem[],
@@ -1604,7 +1516,6 @@ function computeTracePath(
   const connectedEdgeIds = new Set<string>();
   const visitedNodes = new Set<string>([selectedNodeId]);
 
-  // 1. โหมด 1-Step: ดูเฉพาะเพื่อนบ้านที่เชื่อมติดกันโดยตรง
   if (traceMode === 'direct') {
     for (const edge of edges) {
       if (edge.source === selectedNodeId || edge.target === selectedNodeId) {
@@ -1616,27 +1527,29 @@ function computeTracePath(
     return { connectedNodeIds: visitedNodes, connectedEdgeIds };
   }
 
-  // 2. โหมดทั้งสาย: ใช้ BFS ท่องกราฟเป็นระลอกคลื่น
-  const queue: string[] = [selectedNodeId];
-
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-
+  const downstreamQueue: string[] = [selectedNodeId];
+  while (downstreamQueue.length > 0) {
+    const current = downstreamQueue.shift()!;
     for (const edge of edges) {
-      // เดินตามน้ำ (Downstream)
       if (edge.source === current) {
         connectedEdgeIds.add(edge.id);
         if (!visitedNodes.has(edge.target)) {
           visitedNodes.add(edge.target);
-          queue.push(edge.target);
+          downstreamQueue.push(edge.target);
         }
       }
-      // เดินทวนน้ำ (Upstream)
+    }
+  }
+
+  const upstreamQueue: string[] = [selectedNodeId];
+  while (upstreamQueue.length > 0) {
+    const current = upstreamQueue.shift()!;
+    for (const edge of edges) {
       if (edge.target === current) {
         connectedEdgeIds.add(edge.id);
         if (!visitedNodes.has(edge.source)) {
           visitedNodes.add(edge.source);
-          queue.push(edge.source);
+          upstreamQueue.push(edge.source);
         }
       }
     }
@@ -1645,9 +1558,6 @@ function computeTracePath(
   return { connectedNodeIds: visitedNodes, connectedEdgeIds };
 }
 
-/**
- * Transform domain node models into interactive React Flow node representations.
- */
 function toRfNodes(
   items: FlowNodeItem[],
   selectedNodeId: string | null,
@@ -1745,9 +1655,6 @@ function toRfNodes(
   });
 }
 
-/**
- * Transform domain edge models into styled React Flow edge definitions.
- */
 function toRfEdges(
   items: FlowEdgeItem[],
   selectedNodeId: string | null,
@@ -1756,7 +1663,6 @@ function toRfEdges(
   return (items ?? []).map((item) => {
     const isConnected = selectedNodeId ? connectedEdgeIds.has(item.id) : true;
 
-    // แสดงป้ายกำกับเส้นเฉพาะเมื่อมีการคลิกเลือกโหนดที่เชื่อมโยงเท่านั้น (ไม่ให้ป้ายลอยค้างตอนยังไม่ได้เลือก)
     const displayLabel = selectedNodeId && isConnected ? item.label : undefined;
 
     const strokeColor = item.style?.stroke || '#737373';
@@ -1800,7 +1706,6 @@ function toRfEdges(
   });
 }
 
-// คอมโพเนนต์ภายในที่ใช้ hook ของ React Flow ได้โดยตรง
 function FlowCanvasInner({ nodes, edges, onSelectNode }: FlowCanvasProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [traceMode, setTraceMode] = useState<TraceMode>('full');
@@ -1808,7 +1713,6 @@ function FlowCanvasInner({ nodes, edges, onSelectNode }: FlowCanvasProps) {
   const [autoInspect, setAutoInspect] = useState<boolean>(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState<boolean>(false);
 
-  // สเตตกล่องค้นหาโหนด (Node Finder)
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -1842,7 +1746,6 @@ function FlowCanvasInner({ nodes, edges, onSelectNode }: FlowCanvasProps) {
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node<NodeData>>(initialNodes);
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge>(initialEdges);
 
-  // คงตำแหน่งที่ผู้ใช้ลากไว้ ไม่ให้รีเซ็ตกลับเป็นตำแหน่งจาก layout ทุกครั้งที่เปลี่ยนโหนดที่เลือก
   useEffect(() => {
     setRfNodes((prevNodes) => {
       const prevPositions = new Map(prevNodes.map((n) => [n.id, n.position]));
@@ -1857,12 +1760,10 @@ function FlowCanvasInner({ nodes, edges, onSelectNode }: FlowCanvasProps) {
     setRfEdges(initialEdges);
   }, [initialEdges, setRfEdges]);
 
-  // ล้างการ Focus
   const handleClearFocus = useCallback(() => {
     setSelectedNodeId(null);
   }, []);
 
-  // เลื่อนกล้องและซูมไปหาโหนดเป้าหมาย (Pan to Node)
   const focusAndPanToNode = useCallback(
     (nodeItem: FlowNodeItem) => {
       setSelectedNodeId(nodeItem.id);
@@ -1881,7 +1782,6 @@ function FlowCanvasInner({ nodes, edges, onSelectNode }: FlowCanvasProps) {
     [setCenter, autoInspect, onSelectNode]
   );
 
-  // คีย์ลัดระดับ Global (Ctrl+K หรือ / เพื่อค้นหาโหนด, Esc เพื่อล้างโฟกัส)
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
@@ -1904,14 +1804,12 @@ function FlowCanvasInner({ nodes, edges, onSelectNode }: FlowCanvasProps) {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, [selectedNodeId, handleClearFocus]);
 
-  // รายการผลลัพธ์การค้นหา
   const searchResults = useMemo(() => {
     if (!searchQuery.trim()) return [];
     const query = searchQuery.trim().toLowerCase();
     return nodes.filter((n) => n.path.toLowerCase().includes(query)).slice(0, 10);
   }, [nodes, searchQuery]);
 
-  // ปิด Dropdown เมื่อคลิกข้างนอก
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as globalThis.Node;
@@ -1932,10 +1830,9 @@ function FlowCanvasInner({ nodes, edges, onSelectNode }: FlowCanvasProps) {
 
   return (
     <div className="h-[620px] w-full rounded-lg border border-[#262626] bg-[#000000] overflow-hidden relative font-sans shadow-2xl">
-      {/* Vercel-style Precision Toolbar */}
+
       <div className="absolute top-3.5 right-3.5 z-20 flex items-center gap-2 max-w-[90%]">
-        
-        {/* Dock 1: Monochrome Node Search Command Bar */}
+
         <div ref={searchContainerRef} className="relative">
           <div className="flex items-center gap-2 bg-[#000000]/90 backdrop-blur-md border border-[#262626] rounded-md px-2.5 py-1.5 text-zinc-300 shadow-md focus-within:border-white focus-within:ring-1 focus-within:ring-white/20 transition">
             <Search className="w-3.5 h-3.5 text-zinc-400" />
@@ -1969,7 +1866,6 @@ function FlowCanvasInner({ nodes, edges, onSelectNode }: FlowCanvasProps) {
             )}
           </div>
 
-          {/* Search Dropdown Results */}
           {isSearchOpen && searchResults.length > 0 && (
             <div className="absolute right-0 top-full mt-1.5 w-72 max-h-64 overflow-y-auto bg-[#0a0a0a] border border-[#262626] rounded-md shadow-2xl z-50 p-1.5 flex flex-col gap-1">
               <div className="px-2 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
@@ -2006,7 +1902,6 @@ function FlowCanvasInner({ nodes, edges, onSelectNode }: FlowCanvasProps) {
           )}
         </div>
 
-        {/* Dock 2: Trace Focus State Action */}
         {selectedNodeId && (
           <div className="flex items-center gap-1 bg-[#000000]/90 backdrop-blur-md border border-[#262626] rounded-md p-1 shadow-md text-xs">
             <button
@@ -2048,7 +1943,6 @@ function FlowCanvasInner({ nodes, edges, onSelectNode }: FlowCanvasProps) {
           </div>
         )}
 
-        {/* Dock 3: View Options & Menu Dropdown */}
         <div ref={settingsMenuRef} className="relative">
           <div className="flex items-center gap-1 bg-[#000000]/90 backdrop-blur-md border border-[#262626] rounded-md p-1 shadow-md text-xs">
             <button
@@ -2074,7 +1968,6 @@ function FlowCanvasInner({ nodes, edges, onSelectNode }: FlowCanvasProps) {
             </button>
           </div>
 
-          {/* Settings Menu Dropdown */}
           {showSettingsMenu && (
             <div className="absolute right-0 top-full mt-1.5 w-56 bg-[#0a0a0a] border border-[#262626] rounded-md shadow-2xl z-50 p-2 flex flex-col gap-2 text-xs">
 
@@ -2160,16 +2053,14 @@ function FlowCanvasInner({ nodes, edges, onSelectNode }: FlowCanvasProps) {
   );
 }
 
-/**
- * Main interactive flowchart canvas component wrapped with ReactFlowProvider.
- */
 export function FlowCanvas(props: FlowCanvasProps) {
   return (
     <ReactFlowProvider>
       <FlowCanvasInner {...props} />
     </ReactFlowProvider>
   );
-}`;
+}
+`;
 
 const RAW_SIDEDRAWER = `'use client';
 
@@ -2188,9 +2079,6 @@ export interface SideDrawerProps {
   isLoading?: boolean;
 }
 
-/**
- * Slide-over drawer component for inspecting source code with syntax highlighting.
- */
 export function SideDrawer({
   isOpen,
   onClose,
@@ -2205,7 +2093,6 @@ export function SideDrawer({
   const showFullCode = Boolean(filePath && fullCodeFilePath === filePath);
   const drawerRef = useRef<HTMLDivElement>(null);
 
-  // ปิด Drawer เมื่อกดปุ่ม Escape (Keyboard Accessibility)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isOpen) {
@@ -2242,14 +2129,13 @@ export function SideDrawer({
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      {/* Backdrop: ปิด Drawer เมื่อคลิกพื้นที่ว่างรอบนอก */}
-      <div 
+
+      <div
         className="fixed inset-0 bg-black/75 backdrop-blur-xs transition-opacity cursor-pointer"
         onClick={onClose}
         aria-hidden="true"
       />
 
-      {/* แผง Drawer ส่องโค้ด สไตล์ Vercel Code Inspector */}
       <div
         ref={drawerRef}
         role="dialog"
@@ -2257,7 +2143,7 @@ export function SideDrawer({
         aria-label="Code Inspector Drawer"
         className="relative z-10 flex w-full max-w-2xl flex-col bg-[#000000] border-l border-[#262626] text-[#ededed] shadow-2xl animate-in slide-in-from-right duration-150"
       >
-        {/* แถบหัว Drawer */}
+
         <div className="flex items-center justify-between border-b border-[#262626] px-6 py-4 bg-[#0a0a0a]">
           <div className="flex flex-col gap-1 overflow-hidden">
             <div className="flex items-center gap-2">
@@ -2270,9 +2156,9 @@ export function SideDrawer({
               {filePath || 'ไม่ได้เลือกไฟล์'}
             </h2>
           </div>
-          <button 
-            onClick={onClose} 
-            aria-label="Close drawer" 
+          <button
+            onClick={onClose}
+            aria-label="Close drawer"
             className="p-1.5 rounded text-zinc-400 hover:text-white hover:bg-[#171717] transition-colors cursor-pointer"
             title="ปิดหน้าต่าง (Esc)"
           >
@@ -2280,7 +2166,6 @@ export function SideDrawer({
           </button>
         </div>
 
-        {/* แถบควบคุมและสถิติบรรทัด */}
         <div className="flex items-center justify-between border-b border-[#262626] bg-[#000000] px-6 py-2.5 text-xs text-zinc-400 font-mono">
           <div className="flex items-center gap-2">
             <span>{totalLines} บรรทัด</span>
@@ -2299,18 +2184,18 @@ export function SideDrawer({
               </button>
             )}
             {githubRawUrl && (
-              <a 
-                href={githubRawUrl} 
-                target="_blank" 
-                rel="noopener noreferrer" 
+              <a
+                href={githubRawUrl}
+                target="_blank"
+                rel="noopener noreferrer"
                 className="flex items-center gap-1.5 rounded bg-[#171717] hover:bg-[#262626] px-2.5 py-1 text-zinc-300 transition-colors cursor-pointer border border-[#262626]"
               >
                 <span>เปิดบน GitHub</span>
                 <ExternalLink className="w-3.5 h-3.5" />
               </a>
             )}
-            <button 
-              onClick={handleCopy} 
+            <button
+              onClick={handleCopy}
               disabled={isLoading || !rawCode}
               className="flex items-center gap-1.5 rounded bg-[#171717] hover:bg-[#262626] disabled:opacity-50 px-2.5 py-1 text-zinc-300 transition-colors cursor-pointer border border-[#262626]"
             >
@@ -2329,7 +2214,6 @@ export function SideDrawer({
           </div>
         </div>
 
-        {/* พื้นที่แสดงโค้ด */}
         <div className="relative flex-1 overflow-auto p-6 font-mono text-sm bg-[#000000]">
           {isLoading ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 text-slate-400">
@@ -2349,28 +2233,11 @@ export function SideDrawer({
       </div>
     </div>
   );
-}`;
+}
+`;
 
 const RAW_LAYOUT = `import type { Metadata } from "next";
-import { Geist, Geist_Mono, IBM_Plex_Sans_Thai } from "next/font/google";
 import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
-const ibmPlexSansThai = IBM_Plex_Sans_Thai({
-  weight: ["400", "500", "600", "700"],
-  subsets: ["thai", "latin"],
-  variable: "--font-thai",
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: "Git Flowchart",
@@ -2383,10 +2250,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html
-      lang="en"
-      className={\`\${geistSans.variable} \${geistMono.variable} \${ibmPlexSansThai.variable} h-full antialiased\`}
-    >
+    <html lang="en" className="h-full antialiased">
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );
@@ -2394,9 +2258,7 @@ export default function RootLayout({
 
 `;
 
-const RAW_TYPES = `// src/types/index.ts
-
-export type NextFileType = 'page' | 'layout' | 'action' | 'middleware' | 'store' | 'component' | 'hook' | 'api' | 'other';
+const RAW_TYPES = `export type NextFileType = 'page' | 'layout' | 'action' | 'middleware' | 'store' | 'component' | 'hook' | 'api' | 'other';
 
 export interface GitHubTreeItem {
   path: string;
@@ -2460,14 +2322,15 @@ export interface SideDrawerState {
   fileType: NextFileType | null;
   githubRawUrl: string | null;
 }
+
 `;
 
 const RAW_GLOBALS = `@import "tailwindcss";
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-thai), var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "IBM Plex Sans Thai", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 :root {
@@ -2476,7 +2339,7 @@ const RAW_GLOBALS = `@import "tailwindcss";
 }
 
 body {
-  font-family: var(--font-thai), var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-sans);
   background-color: var(--background);
   color: var(--foreground);
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
@@ -2485,21 +2348,18 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Vercel-style Precision Grid Background */
 .bg-grid-pattern {
   background-size: 32px 32px;
-  background-image: 
+  background-image:
     linear-gradient(to right, rgba(255, 255, 255, 0.05) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
 }
 
-/* Vercel-style Monochrome Text Selection */
 ::selection {
   background: rgba(255, 255, 255, 0.2);
   color: #ffffff;
 }
 
-/* Vercel-style Ultra-thin Minimalist Scrollbars */
 ::-webkit-scrollbar {
   width: 4px;
   height: 4px;
@@ -2518,7 +2378,6 @@ body {
   background: #404040;
 }
 
-/* Prism Syntax Highlighting (High-contrast Developer Dark Theme) */
 .token.comment,
 .token.prolog,
 .token.doctype,
@@ -2570,6 +2429,7 @@ body {
 .token.variable {
   color: #f43f5e !important;
 }
+
 `;
 
 const RAW_TEST1 = `import { describe, it, expect } from 'vitest';
@@ -3056,18 +2916,12 @@ describe('encode/decodeShareableState', () => {
 
 const RAW_GITHUB = `import { ParsedGitHubUrl } from '../types';
 
-/**
- * Extract branch name from URL path segments containing /tree/ or /blob/.
- */
 function parseBranchFromSegments(segments: string[]): string | undefined {
   const markerIndex = segments.findIndex((seg) => seg === 'tree' || seg === 'blob');
   if (markerIndex === -1 || markerIndex + 1 >= segments.length) return undefined;
   return segments.slice(markerIndex + 1).join('/') || undefined;
 }
 
-/**
- * Parse a GitHub repository URL into owner, repository, and optional branch.
- */
 export function parseGitHubUrl(url: string): ParsedGitHubUrl | null {
   if (!url || typeof url !== 'string') return null;
   const trimmedUrl = url.trim();
@@ -3094,16 +2948,10 @@ export function parseGitHubUrl(url: string): ParsedGitHubUrl | null {
   }
 }
 
-/**
- * Build the recursive Git Tree API endpoint for a GitHub repository.
- */
 export function buildGitHubApiUrl(owner: string, repo: string, branch = 'main'): string {
   return \`https://api.github.com/repos/\${owner}/\${repo}/git/trees/\${branch}?recursive=1\`;
 }
 
-/**
- * Construct HTTP headers for GitHub API requests with optional authorization.
- */
 export function buildGitHubHeaders(token?: string): Record<string, string> {
   const headers: Record<string, string> = {
     'User-Agent': 'GitFlow-Visualizer',
@@ -3116,21 +2964,16 @@ export function buildGitHubHeaders(token?: string): Record<string, string> {
   return headers;
 }
 
-/**
- * Build raw content URL for retrieving file source from GitHub.
- */
 export function buildGitHubRawUrl(owner: string, repo: string, filePath: string, branch = 'main'): string {
   const cleanPath = filePath.replace(/^\\/+/, '');
   return \`https://raw.githubusercontent.com/\${owner}/\${repo}/\${branch}/\${cleanPath}\`;
 }
 
-/**
- * Build web URL for viewing a file directly on GitHub.
- */
 export function buildGitHubBlobUrl(owner: string, repo: string, filePath: string, branch = 'main'): string {
   const cleanPath = filePath.replace(/^\\/+/, '');
   return \`https://github.com/\${owner}/\${repo}/blob/\${branch}/\${cleanPath}\`;
-}`;
+}
+`;
 
 // 6 LOGICAL BLOCKS DEFINITION (ครอบคลุมทั้ง 3 ไฟล์: pipeline.ts, route.ts, github.ts)
 

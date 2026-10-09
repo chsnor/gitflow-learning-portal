@@ -1231,6 +1231,14 @@ function peekCode(fileKey, targetLine) {
 }
 window.peekCode = peekCode;
 
+function toggleSiteMap(open) {
+  const modal = document.getElementById("sitemap-modal");
+  if (!modal) return;
+  modal.hidden = !open;
+  document.body.style.overflow = open ? "hidden" : "";
+}
+window.toggleSiteMap = toggleSiteMap;
+
 function closeCodePeek() {
   const modal = document.getElementById("code-peek-modal");
   if (modal) modal.hidden = true;
@@ -1593,6 +1601,12 @@ window.addEventListener("keydown", (e) => {
     }
     if (movePin(dir * stepSize)) e.preventDefault();
   } else if (e.key === "Escape") {
+    const sitemapModal = document.getElementById("sitemap-modal");
+    if (sitemapModal && !sitemapModal.hidden) {
+      toggleSiteMap(false);
+      e.preventDefault();
+      return;
+    }
     const peekModal = document.getElementById("code-peek-modal");
     if (peekModal && !peekModal.hidden) {
       closeCodePeek();

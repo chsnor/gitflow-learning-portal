@@ -99,9 +99,16 @@
 
         <div id="section-tabs" class="order-3 flex w-full gap-1 overflow-x-auto sm:order-none sm:w-auto" role="tablist" aria-label="หมวดย่อยของโหมด"></div>
 
-        <button type="button" id="ctx-btn" class="step-btn" onclick="toggleContextRail()" aria-label="เปิดหรือปิดแถบบริบทด้านข้าง" title="เปิด/ปิดแถบบริบทด้านข้าง">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h7"/></svg>
-        </button>
+        <div class="flex items-center gap-1.5">
+          <button type="button" class="step-btn px-2.5 flex items-center gap-1.5 text-[12px] font-semibold text-accent border-accent/40 bg-accent/10 hover:bg-accent/20" onclick="toggleSiteMap(true)" aria-label="เปิดแผนผังภาพรวมหน้าเว็บ" title="คลิกเพื่อดูสารบัญและแผนที่หน้าเว็บทั้งหมด">
+            <svg viewBox="0 0 24 24" class="size-3.5" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            <span class="hidden sm:inline">แผนผังเว็บ</span>
+          </button>
+
+          <button type="button" id="ctx-btn" class="step-btn" onclick="toggleContextRail()" aria-label="เปิดหรือปิดแถบบริบทด้านข้าง" title="เปิด/ปิดแถบบริบทด้านข้าง">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h7"/></svg>
+          </button>
+        </div>
 
         <div class="flex items-center gap-1.5" role="group" aria-label="เลื่อนสเต็ป" id="step-nav">
           <button type="button" class="step-btn" onclick="prevStep()" aria-label="สเต็ปก่อนหน้า (A)">
@@ -287,6 +294,111 @@
       <div class="code-peek-body" id="peek-code-body"></div>
       <footer class="code-peek-footer">
         <span class="text-[12px] text-ink-dim">💡 กด <kbd>Esc</kbd> หรือคลิกนอกหน้าต่างเพื่อปิด และอ่านเนื้อหาต่อได้ทันที</span>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ================= Site Map Modal (แผนผังและคู่มือนำทางทั้งเว็บ) ================= -->
+  <div id="sitemap-modal" class="code-peek-backdrop" role="dialog" aria-modal="true" aria-label="แผนผังหน้าเว็บทั้งหมด" hidden onclick="if(event.target===this)toggleSiteMap(false)">
+    <div class="code-peek-window max-w-[860px] max-h-[88vh] overflow-y-auto">
+      <header class="code-peek-header">
+        <div class="code-peek-title">
+          <span class="grid size-8 place-items-center rounded-lg border border-accent/40 bg-accent/15 text-[16px]" aria-hidden="true">🗺️</span>
+          <div>
+            <h2 class="text-[15px] font-bold text-ink">แผนผังเว็บไซต์ (Learning Portal Site Map)</h2>
+            <div class="text-[12px] text-ink-faint">สรุปโครงสร้างทั้ง 4 โหมดหลัก และ 9 ส่วนย่อย — กดคลิกเพื่อข้ามไปยังหน้านั้นได้ทันที</div>
+          </div>
+        </div>
+        <button type="button" class="step-btn" onclick="toggleSiteMap(false)" aria-label="ปิดแผนผังหน้าเว็บ">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </header>
+
+      <div class="p-4 sm:p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <!-- การ์ด 1: โค้ด & สเต็ป -->
+        <div class="rounded-xl border border-line-soft bg-deep/60 p-4 flex flex-col gap-2.5">
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-[14px] text-accent flex items-center gap-2">
+              <span class="text-[16px]">💻</span> โหมด 1: เจาะสเต็ป (Code Explorer)
+            </span>
+            <span class="badge badge-neutral text-[11px]">โหมดหลัก</span>
+          </div>
+          <p class="text-[12px] text-ink-dim leading-relaxed">
+            ดูโค้ดจริง 14 ไฟล์คู่ขนาน 2 ฝั่ง (ซ้าย: คน 6 / ขวา: โมดูลเพื่อน) เชื่อมโยง 6 สเต็ปหลัก พร้อมระบบคลิกดูที่มาทีละบรรทัด (Line Reader) และ Inspector วิเคราะห์ความสัมพันธ์
+          </p>
+          <div class="flex flex-wrap gap-2 mt-auto pt-2">
+            <button type="button" class="nav-btn text-[11.5px] px-3 py-1" onclick="switchMainView('blocks'); toggleSiteMap(false);">
+              เปิดโค้ดคู่ขนาน ↗
+            </button>
+            <button type="button" class="nav-btn text-[11.5px] px-3 py-1" onclick="switchMainView('summary'); toggleSiteMap(false);">
+              ภาพรวม 6 สเต็ป ↗
+            </button>
+          </div>
+        </div>
+
+        <!-- การ์ด 2: ไทม์ไลน์จำลองระบบ -->
+        <div class="rounded-xl border border-line-soft bg-deep/60 p-4 flex flex-col gap-2.5">
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-[14px] text-ok flex items-center gap-2">
+              <span class="text-[16px]">⏱️</span> โหมด 2: ไทม์ไลน์จำลอง (Simulation)
+            </span>
+            <span class="badge badge-neutral text-[11px]">14 จังหวะ</span>
+          </div>
+          <p class="text-[12px] text-ink-dim leading-relaxed">
+            จำลองการทำงานทั้งระบบ 14 จังหวะตั้งแต่ผู้ใช้กรอก URL, ตรวจสอบรูปแบบ, ยิง GitHub Trees API, กรอง 45 ไฟล์, วาด Dagre Layout, จนถึงการกดคลิกโหนด และแชร์ URL
+          </p>
+          <div class="flex flex-wrap gap-2 mt-auto pt-2">
+            <button type="button" class="nav-btn text-[11.5px] px-3 py-1" onclick="switchMainView('sim'); toggleSiteMap(false);">
+              เปิดไทม์ไลน์ 14 จังหวะ ↗
+            </button>
+          </div>
+        </div>
+
+        <!-- การ์ด 3: สถาปัตยกรรม & ฟังก์ชัน -->
+        <div class="rounded-xl border border-line-soft bg-deep/60 p-4 flex flex-col gap-2.5">
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-[14px] text-warn flex items-center gap-2">
+              <span class="text-[16px]">🏛️</span> โหมด 3: สถาปัตยกรรม &amp; ระบบ (System)
+            </span>
+            <span class="badge badge-neutral text-[11px]">5 หมวดย่อย</span>
+          </div>
+          <p class="text-[12px] text-ink-dim leading-relaxed">
+            ศูนย์รวมข้อมูลโครงสร้างระบบ: สถาปัตยกรรม 7 ชั้น, <strong>สารบัญฟังก์ชัน 40 ตัวจริงครบทุกไฟล์</strong>, ถอดรหัส CI/CD ci.yml, 6 จุดเสี่ยง Red Team, และเทคนิคเชิงลึก
+          </p>
+          <div class="flex flex-wrap gap-1.5 mt-auto pt-2">
+            <button type="button" class="nav-btn text-[11px] px-2.5 py-1" onclick="switchMainView('arch'); toggleSiteMap(false);">สถาปัตยกรรม 7 ชั้น</button>
+            <button type="button" class="nav-btn text-[11px] px-2.5 py-1 text-accent border-accent/40 bg-accent/10" onclick="switchMainView('fndex'); toggleSiteMap(false);">สารบัญ 40 ฟังก์ชัน ⭐</button>
+            <button type="button" class="nav-btn text-[11px] px-2.5 py-1" onclick="switchMainView('cicd'); toggleSiteMap(false);">CI/CD</button>
+            <button type="button" class="nav-btn text-[11px] px-2.5 py-1" onclick="switchMainView('redteam'); toggleSiteMap(false);">Red Team</button>
+            <button type="button" class="nav-btn text-[11px] px-2.5 py-1" onclick="switchMainView('deep'); toggleSiteMap(false);">ป้องกันงานลึก</button>
+          </div>
+        </div>
+
+        <!-- การ์ด 4: โพยอาจารย์ & ซ้อมพรีเซนต์ -->
+        <div class="rounded-xl border border-line-soft bg-deep/60 p-4 flex flex-col gap-2.5">
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-[14px] text-accent2 flex items-center gap-2">
+              <span class="text-[16px]">🎯</span> โหมด 4: ซ้อมพรีเซนต์ &amp; โพยตอบอาจารย์
+            </span>
+            <span class="badge badge-neutral text-[11px]">35 คำถาม + 8 หมวด</span>
+          </div>
+          <p class="text-[12px] text-ink-dim leading-relaxed">
+            คลังโพย 35 ข้อครอบคลุมทั้ง API, แคช, การทดสอบ Vitest 6 ไฟล์, การโต้ตอบผู้ใช้ พร้อมแผนการพรีเซนต์ 15 นาที (2-5-5-3 min) และแบบทดสอบความพร้อมก่อนสอบ
+          </p>
+          <div class="flex flex-wrap gap-2 mt-auto pt-2">
+            <button type="button" class="nav-btn text-[11.5px] px-3 py-1 text-accent2 border-accent2/40 bg-accent2/10" onclick="switchMainView('quiz'); toggleSiteMap(false);">
+              โพย 35 ข้ออาจารย์ &amp; Quiz ⭐
+            </button>
+            <button type="button" class="nav-btn text-[11.5px] px-3 py-1" onclick="switchMainView('pitch'); toggleSiteMap(false);">
+              แผนพรีเซนต์ 15 นาที ↗
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <footer class="code-peek-footer flex justify-between items-center text-[12px] text-ink-dim">
+        <span>💡 ใช้ปุ่มตัวเลข <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd> บนคีย์บอร์ดเพื่อสลับโหมดหลักได้ตลอดเวลา</span>
+        <button type="button" class="nav-btn text-[11.5px]" onclick="toggleSiteMap(false)">ปิดหน้าต่าง (Esc)</button>
       </footer>
     </div>
   </div>
