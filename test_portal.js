@@ -317,9 +317,9 @@ const qnaScope = evaluateScript('data-content.js', ['QNA_ITEMS', 'QNA_JUMPS']);
 const qnaItems = qnaScope.QNA_ITEMS;
 const qnaJumps = qnaScope.QNA_JUMPS;
 
-test('9.1 คลังโพยมีคำถามตอบอาจารย์ครบถ้วนอย่างน้อย 30 ข้อ (ปัจจุบัน 35 ข้อ)', () => {
+test('9.1 คลังโพยมีคำถามตอบอาจารย์ครบถ้วนอย่างน้อย 40 ข้อ (ปัจจุบัน 43 ข้อ)', () => {
   assert(Array.isArray(qnaItems), 'QNA_ITEMS ไม่ใช่อาร์เรย์');
-  assert(qnaItems.length >= 30, `จำนวนข้อคำถามน้อยกว่าเกณฑ์ (${qnaItems.length}/30)`);
+  assert(qnaItems.length >= 40, `จำนวนข้อคำถามน้อยกว่าเกณฑ์ (${qnaItems.length}/40)`);
 });
 
 test('9.2 ทุกข้อคำถามมีหมวดหมู่ (cat), คำถาม (q), และคำตอบ (a) ครบถ้วน', () => {
