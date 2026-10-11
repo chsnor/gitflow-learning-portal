@@ -3,7 +3,7 @@
 // (โหลดก่อน data-content.js เพราะ FILE_META อ้างอิง RAW_*)
 // ============================================================
 
-const RAW_PIPELINE = `import { parseGitHubUrl, buildGitHubApiUrl, buildGitHubHeaders } from './github';
+const RAW_PIPELINE = `import { parseGitHubUrl, buildGitHubApiUrl, buildGitHubHeaders, buildGitHubRepoUrl } from './github';
 import { filterTreeFiles, detectNextFileType, extractImportsFromCode } from './parser';
 import { buildFlowElements } from './generator';
 import { AnalysisResult, GitHubTreeItem, CodeRelation, NextFileType } from '../types';
@@ -237,6 +237,25 @@ async function fetchGitHubTree(
       if (fallbackResponse.ok) {
         response = fallbackResponse;
         activeBranch = 'master';
+      } else {
+        const repoRes = await fetch(
+          buildGitHubRepoUrl(owner, repo),
+          { headers: buildGitHubHeaders(token) }
+        );
+        if (repoRes.ok) {
+          const repoData = await repoRes.json();
+          const defaultBranch = typeof repoData.default_branch === 'string' ? repoData.default_branch : null;
+          if (defaultBranch && defaultBranch !== 'main' && defaultBranch !== 'master') {
+            const defaultBranchResponse = await fetch(
+              buildGitHubApiUrl(owner, repo, defaultBranch),
+              { headers: buildGitHubHeaders(token) }
+            );
+            if (defaultBranchResponse.ok) {
+              response = defaultBranchResponse;
+              activeBranch = defaultBranch;
+            }
+          }
+        }
       }
     }
 
@@ -2946,6 +2965,10 @@ export function parseGitHubUrl(url: string): ParsedGitHubUrl | null {
   } catch {
     return null;
   }
+}
+
+export function buildGitHubRepoUrl(owner: string, repo: string): string {
+  return \`https://api.github.com/repos/\${owner}/\${repo}\`;
 }
 
 export function buildGitHubApiUrl(owner: string, repo: string, branch = 'main'): string {
